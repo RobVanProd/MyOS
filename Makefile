@@ -19,6 +19,7 @@ KERNEL_SRCS = src/kernel/kernel.c \
               src/kernel/sound.c \
               src/kernel/hal.c \
               src/kernel/driver.c \
+              src/drivers/storage/ata.c \
               src/apps/notepad.c \
               src/apps/calculator.c
 
