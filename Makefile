@@ -12,7 +12,15 @@ KERNEL_SRCS = src/kernel/kernel.c \
               src/kernel/graphics.c \
               src/kernel/keyboard.c \
               src/kernel/memory.c \
-              src/apps/notepad.c
+              src/kernel/process.c \
+              src/kernel/fs.c \
+              src/kernel/mouse.c \
+              src/kernel/network.c \
+              src/kernel/sound.c \
+              src/kernel/hal.c \
+              src/kernel/driver.c \
+              src/apps/notepad.c \
+              src/apps/calculator.c
 
 # Object files
 BOOT_OBJ = $(BOOT_SRC:.asm=.o)
