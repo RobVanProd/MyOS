@@ -20,6 +20,10 @@ KERNEL_SRCS = src/kernel/kernel.c \
               src/kernel/driver.c \
               src/kernel/pci.c \
               src/kernel/net/netstack.c \
+              src/kernel/net/dhcp.c \
+              src/kernel/net/dns.c \
+              src/kernel/net/firewall.c \
+              src/kernel/net/nettest.c \
               src/drivers/storage/ata.c \
               src/drivers/network/rtl8139.c \
               src/apps/notepad.c \
