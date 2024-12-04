@@ -1,233 +1,371 @@
 #include "netstack.h"
 #include "../memory.h"
 #include <string.h>
+#include <stdio.h>
 
-// Global variables
-static netif_t* netif_list = NULL;
-static proto_handler_t proto_handlers[0x10000] = {0};
-static net_stats_t net_stats = {0};
+// Network interface list
+static net_interface_t* interfaces = NULL;
 
-// Network interface management
-netif_t* netif_add(const char* name, const uint8_t* mac, uint32_t ip, uint32_t netmask, uint32_t gateway) {
-    netif_t* netif = kmalloc(sizeof(netif_t));
-    if (!netif) return NULL;
-    
-    // Initialize interface
-    memset(netif, 0, sizeof(netif_t));
-    strncpy(netif->name, name, sizeof(netif->name)-1);
-    memcpy(netif->mac, mac, 6);
-    netif->ip = ip;
-    netif->netmask = netmask;
-    netif->gateway = gateway;
-    netif->mtu = 1500;
-    
-    // Add to list
-    netif->next = netif_list;
-    netif_list = netif;
-    
-    return netif;
+// Socket list
+static socket_t* sockets = NULL;
+
+// Initialize network stack
+void netstack_init(void) {
+    interfaces = NULL;
+    sockets = NULL;
 }
 
-void netif_remove(netif_t* netif) {
-    if (!netif) return;
+// Cleanup network stack
+void netstack_cleanup(void) {
+    // Free all sockets
+    socket_t* socket = sockets;
+    while (socket) {
+        socket_t* next = socket->next;
+        netstack_socket_destroy(socket);
+        socket = next;
+    }
     
-    // Remove from list
-    netif_t** pp = &netif_list;
-    while (*pp) {
-        if (*pp == netif) {
-            *pp = netif->next;
-            kfree(netif);
-            return;
-        }
-        pp = &(*pp)->next;
+    // Free all interfaces
+    net_interface_t* interface = interfaces;
+    while (interface) {
+        net_interface_t* next = interface->next;
+        kfree(interface);
+        interface = next;
     }
 }
 
-netif_t* netif_find(const char* name) {
-    netif_t* netif = netif_list;
-    while (netif) {
-        if (strcmp(netif->name, name) == 0) {
-            return netif;
-        }
-        netif = netif->next;
-    }
-    return NULL;
-}
-
-void netif_set_up(netif_t* netif) {
-    if (!netif) return;
-    netif->flags |= NIF_UP;
-}
-
-void netif_set_down(netif_t* netif) {
-    if (!netif) return;
-    netif->flags &= ~NIF_UP;
-}
-
-// Protocol registration
-int proto_register(uint16_t proto, proto_handler_t handler) {
-    if (!handler) return -1;
-    if (proto_handlers[proto]) return -1;
-    proto_handlers[proto] = handler;
+// Register network interface
+int netstack_register_interface(net_interface_t* interface) {
+    if (!interface) return -1;
+    
+    // Add to interface list
+    interface->next = interfaces;
+    interfaces = interface;
+    
     return 0;
 }
 
-int proto_unregister(uint16_t proto) {
-    if (!proto_handlers[proto]) return -1;
-    proto_handlers[proto] = NULL;
-    return 0;
-}
-
-// Packet handling
-void netstack_input(netif_t* netif, const void* data, size_t length) {
-    if (!netif || !data || length < 14) return;
+// Unregister network interface
+void netstack_unregister_interface(net_interface_t* interface) {
+    if (!interface) return;
     
-    // Update statistics
-    net_stats.rx_packets++;
-    net_stats.rx_bytes += length;
-    
-    // Get Ethernet header
-    const uint8_t* eth = data;
-    uint16_t proto = (eth[12] << 8) | eth[13];
-    
-    // Find protocol handler
-    proto_handler_t handler = proto_handlers[proto];
-    if (handler) {
-        handler(netif, eth + 14, length - 14);
+    // Remove from interface list
+    if (interfaces == interface) {
+        interfaces = interface->next;
     } else {
-        net_stats.rx_dropped++;
+        net_interface_t* prev = interfaces;
+        while (prev && prev->next != interface) {
+            prev = prev->next;
+        }
+        if (prev) {
+            prev->next = interface->next;
+        }
     }
 }
 
-int netstack_output(netif_t* netif, uint16_t proto, const void* data, size_t length) {
-    if (!netif || !data || length > netif->mtu) return -1;
+// Get first network interface
+net_interface_t* netstack_get_interface(void) {
+    return interfaces;
+}
+
+// Calculate IP/TCP/UDP checksum
+uint16_t netstack_checksum(const void* data, size_t length) {
+    const uint16_t* ptr = (const uint16_t*)data;
+    uint32_t sum = 0;
     
-    // Allocate buffer for Ethernet frame
-    uint8_t* frame = kmalloc(length + 14);
-    if (!frame) return -1;
+    while (length > 1) {
+        sum += *ptr++;
+        length -= 2;
+    }
     
-    // Build Ethernet header
-    memcpy(frame + 0, netif->mac, 6);  // Source MAC
-    // Destination MAC will be filled by ARP
-    frame[12] = proto >> 8;
-    frame[13] = proto & 0xFF;
+    if (length > 0) {
+        sum += *(const uint8_t*)ptr;
+    }
     
-    // Copy payload
-    memcpy(frame + 14, data, length);
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
     
-    // Transmit frame
-    if (netif->transmit(netif, frame, length + 14) < 0) {
-        net_stats.tx_dropped++;
-        kfree(frame);
+    return ~sum;
+}
+
+// Handle incoming network packet
+void netstack_handle_packet(const void* data, size_t length) {
+    if (length < sizeof(ethernet_header_t)) return;
+    
+    const ethernet_header_t* eth = (const ethernet_header_t*)data;
+    uint16_t ethertype = ntohs(eth->ethertype);
+    
+    // Skip ethernet header
+    data = (const uint8_t*)data + sizeof(ethernet_header_t);
+    length -= sizeof(ethernet_header_t);
+    
+    switch (ethertype) {
+        case ETH_TYPE_IP:
+            netstack_handle_ipv4(data, length);
+            break;
+            
+        case ETH_TYPE_ARP:
+            netstack_handle_arp(data, length);
+            break;
+    }
+}
+
+// Handle IPv4 packet
+void netstack_handle_ipv4(const void* data, size_t length) {
+    if (length < sizeof(ipv4_header_t)) return;
+    
+    const ipv4_header_t* ip = (const ipv4_header_t*)data;
+    uint8_t ihl = (ip->version_ihl & 0x0F) * 4;
+    
+    // Verify checksum
+    if (netstack_checksum(ip, ihl) != 0) return;
+    
+    // Skip IP header
+    data = (const uint8_t*)data + ihl;
+    length -= ihl;
+    
+    switch (ip->protocol) {
+        case IP_PROTO_ICMP:
+            netstack_handle_icmp(data, length);
+            break;
+            
+        case IP_PROTO_TCP:
+            netstack_handle_tcp(data, length);
+            break;
+            
+        case IP_PROTO_UDP:
+            netstack_handle_udp(data, length);
+            break;
+    }
+}
+
+// Handle ARP packet
+void netstack_handle_arp(const void* data, size_t length) {
+    // TODO: Implement ARP handling
+}
+
+// Handle ICMP packet
+void netstack_handle_icmp(const void* data, size_t length) {
+    if (length < sizeof(icmp_header_t)) return;
+    
+    const icmp_header_t* icmp = (const icmp_header_t*)data;
+    
+    // Verify checksum
+    if (netstack_checksum(icmp, length) != 0) return;
+    
+    // Handle ICMP echo request
+    if (icmp->type == 8 && icmp->code == 0) {
+        // TODO: Send ICMP echo reply
+    }
+}
+
+// Handle TCP packet
+void netstack_handle_tcp(const void* data, size_t length) {
+    if (length < sizeof(tcp_header_t)) return;
+    
+    const tcp_header_t* tcp = (const tcp_header_t*)data;
+    uint16_t src_port = ntohs(tcp->src_port);
+    uint16_t dest_port = ntohs(tcp->dest_port);
+    
+    // Find matching socket
+    socket_t* socket = sockets;
+    while (socket) {
+        if (socket->protocol == IP_PROTO_TCP &&
+            socket->local_port == dest_port &&
+            (socket->state == SOCKET_LISTENING ||
+             (socket->remote_port == src_port))) {
+            // Handle TCP packet for socket
+            // TODO: Implement TCP state machine
+            break;
+        }
+        socket = socket->next;
+    }
+}
+
+// Handle UDP packet
+void netstack_handle_udp(const void* data, size_t length) {
+    if (length < sizeof(udp_header_t)) return;
+    
+    const udp_header_t* udp = (const udp_header_t*)data;
+    uint16_t src_port = ntohs(udp->src_port);
+    uint16_t dest_port = ntohs(udp->dest_port);
+    
+    // Find matching socket
+    socket_t* socket = sockets;
+    while (socket) {
+        if (socket->protocol == IP_PROTO_UDP &&
+            socket->local_port == dest_port) {
+            // Copy data to socket receive buffer
+            size_t data_length = length - sizeof(udp_header_t);
+            if (data_length > 0 && socket->rx_buffer) {
+                memcpy(socket->rx_buffer,
+                       (const uint8_t*)data + sizeof(udp_header_t),
+                       data_length);
+                socket->rx_size = data_length;
+            }
+            break;
+        }
+        socket = socket->next;
+    }
+}
+
+// Send network packet
+int netstack_send_packet(const void* data, size_t length) {
+    net_interface_t* interface = netstack_get_interface();
+    if (!interface) return -1;
+    
+    return interface->transmit(data, length);
+}
+
+// Create network socket
+socket_t* netstack_socket_create(int protocol) {
+    socket_t* socket = kmalloc(sizeof(socket_t));
+    if (!socket) return NULL;
+    
+    memset(socket, 0, sizeof(socket_t));
+    socket->protocol = protocol;
+    
+    // Add to socket list
+    socket->next = sockets;
+    sockets = socket;
+    
+    return socket;
+}
+
+// Destroy network socket
+void netstack_socket_destroy(socket_t* socket) {
+    if (!socket) return;
+    
+    // Remove from socket list
+    if (sockets == socket) {
+        sockets = socket->next;
+    } else {
+        socket_t* prev = sockets;
+        while (prev && prev->next != socket) {
+            prev = prev->next;
+        }
+        if (prev) {
+            prev->next = socket->next;
+        }
+    }
+    
+    // Free buffers
+    if (socket->rx_buffer) kfree(socket->rx_buffer);
+    if (socket->tx_buffer) kfree(socket->tx_buffer);
+    
+    kfree(socket);
+}
+
+// Bind socket to local port
+int netstack_socket_bind(socket_t* socket, uint16_t port) {
+    if (!socket) return -1;
+    
+    // Check if port already in use
+    socket_t* s = sockets;
+    while (s) {
+        if (s != socket && s->local_port == port) {
+            return -1;
+        }
+        s = s->next;
+    }
+    
+    socket->local_port = port;
+    return 0;
+}
+
+// Connect socket to remote host
+int netstack_socket_connect(socket_t* socket, uint32_t ip, uint16_t port) {
+    if (!socket) return -1;
+    
+    socket->remote_ip = ip;
+    socket->remote_port = port;
+    
+    if (socket->protocol == IP_PROTO_TCP) {
+        // TODO: Implement TCP connection establishment
         return -1;
     }
     
-    // Update statistics
-    net_stats.tx_packets++;
-    net_stats.tx_bytes += length + 14;
-    
-    kfree(frame);
     return 0;
 }
 
-// Network utilities
-uint32_t ip_to_uint32(const char* ip) {
-    uint32_t result = 0;
-    uint8_t octet = 0;
+// Listen for incoming connections
+int netstack_socket_listen(socket_t* socket) {
+    if (!socket || socket->protocol != IP_PROTO_TCP) return -1;
     
-    while (*ip) {
-        if (*ip == '.') {
-            result = (result << 8) | octet;
-            octet = 0;
-        } else if (*ip >= '0' && *ip <= '9') {
-            octet = octet * 10 + (*ip - '0');
-        }
-        ip++;
-    }
-    
-    return (result << 8) | octet;
+    socket->state = SOCKET_LISTENING;
+    return 0;
 }
 
-void uint32_to_ip(uint32_t ip, char* buffer) {
+// Accept incoming connection
+socket_t* netstack_socket_accept(socket_t* socket) {
+    if (!socket || socket->protocol != IP_PROTO_TCP ||
+        socket->state != SOCKET_LISTENING) return NULL;
+    
+    // TODO: Implement TCP connection acceptance
+    return NULL;
+}
+
+// Send data through socket
+int netstack_socket_send(socket_t* socket, const void* data, size_t length) {
+    if (!socket || !data || length == 0) return -1;
+    
+    if (socket->protocol == IP_PROTO_UDP) {
+        // Construct UDP packet
+        uint8_t packet[1500];
+        udp_header_t* udp = (udp_header_t*)packet;
+        
+        udp->src_port = htons(socket->local_port);
+        udp->dest_port = htons(socket->remote_port);
+        udp->length = htons(sizeof(udp_header_t) + length);
+        udp->checksum = 0; // Optional for UDP
+        
+        memcpy(packet + sizeof(udp_header_t), data, length);
+        
+        // Send packet
+        return netstack_send_packet(packet, sizeof(udp_header_t) + length);
+    } else if (socket->protocol == IP_PROTO_TCP) {
+        // TODO: Implement TCP send
+        return -1;
+    }
+    
+    return -1;
+}
+
+// Receive data from socket
+int netstack_socket_receive(socket_t* socket, void* buffer, size_t max_length) {
+    if (!socket || !buffer || max_length == 0) return -1;
+    
+    if (socket->protocol == IP_PROTO_UDP) {
+        // Copy data from receive buffer
+        if (socket->rx_buffer && socket->rx_size > 0) {
+            size_t length = socket->rx_size;
+            if (length > max_length) length = max_length;
+            
+            memcpy(buffer, socket->rx_buffer, length);
+            socket->rx_size = 0;
+            
+            return length;
+        }
+    } else if (socket->protocol == IP_PROTO_TCP) {
+        // TODO: Implement TCP receive
+        return -1;
+    }
+    
+    return 0;
+}
+
+// Format MAC address string
+void netstack_format_mac(char* buffer, const uint8_t* mac) {
+    sprintf(buffer, "%02x:%02x:%02x:%02x:%02x:%02x",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+// Format IP address string
+void netstack_format_ip(char* buffer, uint32_t ip) {
     sprintf(buffer, "%d.%d.%d.%d",
-        (ip >> 24) & 0xFF,
-        (ip >> 16) & 0xFF,
-        (ip >> 8) & 0xFF,
-        ip & 0xFF);
-}
-
-uint16_t htons(uint16_t value) {
-    return ((value & 0xFF) << 8) | ((value >> 8) & 0xFF);
-}
-
-uint16_t ntohs(uint16_t value) {
-    return htons(value);
-}
-
-uint32_t htonl(uint32_t value) {
-    return ((value & 0xFF) << 24) |
-           ((value & 0xFF00) << 8) |
-           ((value >> 8) & 0xFF00) |
-           ((value >> 24) & 0xFF);
-}
-
-uint32_t ntohl(uint32_t value) {
-    return htonl(value);
-}
-
-// Network statistics
-void net_stats_init(void) {
-    memset(&net_stats, 0, sizeof(net_stats));
-}
-
-void net_stats_get(net_stats_t* stats) {
-    if (!stats) return;
-    memcpy(stats, &net_stats, sizeof(net_stats_t));
-}
-
-void net_stats_reset(void) {
-    memset(&net_stats, 0, sizeof(net_stats));
-}
-
-// Network debugging
-void net_dump_packet(const void* data, size_t length) {
-    const uint8_t* bytes = data;
-    printf("Packet dump (%d bytes):\n", length);
-    
-    for (size_t i = 0; i < length; i++) {
-        if (i % 16 == 0) {
-            printf("\n%04x: ", i);
-        }
-        printf("%02x ", bytes[i]);
-    }
-    printf("\n");
-}
-
-void net_dump_stats(void) {
-    printf("Network Statistics:\n");
-    printf("  RX Packets: %llu\n", net_stats.rx_packets);
-    printf("  TX Packets: %llu\n", net_stats.tx_packets);
-    printf("  RX Bytes: %llu\n", net_stats.rx_bytes);
-    printf("  TX Bytes: %llu\n", net_stats.tx_bytes);
-    printf("  RX Errors: %u\n", net_stats.rx_errors);
-    printf("  TX Errors: %u\n", net_stats.tx_errors);
-    printf("  RX Dropped: %u\n", net_stats.rx_dropped);
-    printf("  TX Dropped: %u\n", net_stats.tx_dropped);
-    printf("  Collisions: %u\n", net_stats.collisions);
-}
-
-// Network stack initialization
-void netstack_init(void) {
-    // Initialize statistics
-    net_stats_init();
-    
-    // Initialize protocol handlers
-    memset(proto_handlers, 0, sizeof(proto_handlers));
-    
-    // Initialize protocols
-    arp_init();
-    ip_init();
-    icmp_init();
-    udp_init();
-    tcp_init();
+            (ip >> 24) & 0xFF,
+            (ip >> 16) & 0xFF,
+            (ip >> 8) & 0xFF,
+            ip & 0xFF);
 } 

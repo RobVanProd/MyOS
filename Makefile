@@ -9,17 +9,19 @@ LDFLAGS = -ffreestanding -O2 -nostdlib
 BOOT_SRC = src/boot/multiboot.asm
 ASM_SRCS = src/kernel/interrupt.asm src/kernel/gdt.asm
 KERNEL_SRCS = src/kernel/kernel.c \
-              src/kernel/graphics.c \
+              src/kernel/terminal.c \
               src/kernel/keyboard.c \
               src/kernel/memory.c \
               src/kernel/process.c \
               src/kernel/fs.c \
               src/kernel/mouse.c \
-              src/kernel/network.c \
               src/kernel/sound.c \
               src/kernel/hal.c \
               src/kernel/driver.c \
+              src/kernel/pci.c \
+              src/kernel/net/netstack.c \
               src/drivers/storage/ata.c \
+              src/drivers/network/rtl8139.c \
               src/apps/notepad.c \
               src/apps/calculator.c
 
