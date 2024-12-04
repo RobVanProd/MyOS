@@ -9,14 +9,10 @@ LDFLAGS = -ffreestanding -O2 -nostdlib
 BOOT_SRC = src/boot/multiboot.asm
 ASM_SRCS = src/kernel/interrupt.asm src/kernel/gdt.asm
 KERNEL_SRCS = src/kernel/kernel.c \
-              src/kernel/terminal.c \
-              src/kernel/gdt.c \
-              src/kernel/idt.c \
-              src/kernel/pic.c \
+              src/kernel/graphics.c \
               src/kernel/keyboard.c \
-              src/kernel/paging.c \
-              src/kernel/kheap.c \
-              src/kernel/mmap.c
+              src/kernel/memory.c \
+              src/apps/notepad.c
 
 # Object files
 BOOT_OBJ = $(BOOT_SRC:.asm=.o)

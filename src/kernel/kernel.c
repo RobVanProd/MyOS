@@ -1,192 +1,107 @@
-#include "terminal.h"
-#include "gdt.h"
-#include "idt.h"
-#include "pic.h"
+#include "graphics.h"
 #include "keyboard.h"
-#include "paging.h"
-#include "kheap.h"
-#include "mmap.h"
+#include "memory.h"
+#include "process.h"
+#include "fs.h"
+#include "mouse.h"
+#include "network.h"
+#include "sound.h"
+#include "../apps/notepad.h"
+#include "../apps/calculator.h"
 
-void print_memory_info(void) {
-    uint32_t free_mem = get_free_memory();
-    uint32_t used_mem = get_used_memory();
+// Global variables for GUI state
+static int mouse_x = 160;
+static int mouse_y = 100;
+static bool mouse_left_button = false;
+
+// Mouse event callback
+void handle_mouse_event(mouse_event_t* event) {
+    mouse_x = event->x;
+    mouse_y = event->y;
+    mouse_left_button = event->buttons & MOUSE_LEFT_BUTTON;
     
-    terminal_writestring("\nMemory Information:\n");
-    terminal_writestring("----------------\n");
-    
-    // Print free memory
-    terminal_writestring("Free memory: ");
-    char free_mem_str[32];
-    int idx = 0;
-    uint32_t temp = free_mem / 1024; // Convert to KB
-    do {
-        free_mem_str[idx++] = '0' + (temp % 10);
-        temp /= 10;
-    } while (temp > 0);
-    free_mem_str[idx] = '\0';
-    // Print in reverse
-    while (--idx >= 0) {
-        terminal_putchar(free_mem_str[idx]);
+    if (mouse_left_button) {
+        handle_window_click(mouse_x, mouse_y);
     }
-    terminal_writestring(" KB\n");
-    
-    // Print used memory
-    terminal_writestring("Used memory: ");
-    char used_mem_str[32];
-    idx = 0;
-    temp = used_mem / 1024; // Convert to KB
-    do {
-        used_mem_str[idx++] = '0' + (temp % 10);
-        temp /= 10;
-    } while (temp > 0);
-    used_mem_str[idx] = '\0';
-    // Print in reverse
-    while (--idx >= 0) {
-        terminal_putchar(used_mem_str[idx]);
-    }
-    terminal_writestring(" KB\n");
-    
-    // Print heap statistics
-    uint32_t total_blocks, free_blocks, largest_free;
-    get_heap_stats(&total_blocks, &free_blocks, &largest_free);
-    
-    terminal_writestring("\nHeap Statistics:\n");
-    terminal_writestring("---------------\n");
-    terminal_writestring("Total blocks: ");
-    char total_str[32];
-    idx = 0;
-    temp = total_blocks;
-    do {
-        total_str[idx++] = '0' + (temp % 10);
-        temp /= 10;
-    } while (temp > 0);
-    while (--idx >= 0) {
-        terminal_putchar(total_str[idx]);
-    }
-    terminal_writestring("\nFree blocks: ");
-    idx = 0;
-    temp = free_blocks;
-    do {
-        total_str[idx++] = '0' + (temp % 10);
-        temp /= 10;
-    } while (temp > 0);
-    while (--idx >= 0) {
-        terminal_putchar(total_str[idx]);
-    }
-    terminal_writestring("\nLargest free block: ");
-    idx = 0;
-    temp = largest_free;
-    do {
-        total_str[idx++] = '0' + (temp % 10);
-        temp /= 10;
-    } while (temp > 0);
-    while (--idx >= 0) {
-        terminal_putchar(total_str[idx]);
-    }
-    terminal_writestring(" bytes\n");
 }
 
-void test_memory_mapping(void) {
-    terminal_writestring("\nTesting memory mapping...\n");
-    
-    // Test anonymous mapping
-    void *anon_map = do_mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (anon_map) {
-        terminal_writestring("Created anonymous mapping at 0x");
-        char addr[9];
-        uint32_t temp = (uint32_t)anon_map;
-        for (int i = 0; i < 8; i++) {
-            int digit = (temp >> ((7-i) * 4)) & 0xF;
-            addr[i] = digit < 10 ? '0' + digit : 'A' + (digit - 10);
-        }
-        addr[8] = '\0';
-        terminal_writestring(addr);
-        terminal_writestring("\n");
-        
-        // Test writing to the mapping
-        uint8_t *test_ptr = (uint8_t*)anon_map;
-        *test_ptr = 42; // This should cause a page fault and allocation
-        
-        terminal_writestring("Successfully wrote to mapped memory\n");
-    } else {
-        terminal_writestring("Failed to create anonymous mapping\n");
-    }
-    
-    // Dump all mappings
-    dump_mappings();
+// Sound callback
+void handle_sound_callback(void* user_data) {
+    // Handle sound buffer completion
 }
 
 void kernel_main(void) {
-    // Initialize terminal for output
-    terminal_initialize();
-    
-    // Initialize GDT
-    terminal_writestring("Initializing GDT...\n");
-    gdt_init();
-    terminal_writestring("GDT initialized successfully!\n");
-    
-    // Initialize IDT
-    terminal_writestring("Initializing IDT...\n");
-    idt_init();
-    terminal_writestring("IDT initialized successfully!\n");
-    
-    // Initialize PIC
-    terminal_writestring("Initializing PIC...\n");
-    pic_init();
-    terminal_writestring("PIC initialized successfully!\n");
-    
-    // Initialize heap
-    terminal_writestring("Initializing kernel heap...\n");
-    init_kheap();
-    terminal_writestring("Kernel heap initialized successfully!\n");
-    
-    // Initialize paging
-    terminal_writestring("Initializing paging...\n");
-    init_paging();
-    terminal_writestring("Paging initialized successfully!\n");
-    
-    // Initialize memory mapping
-    terminal_writestring("Initializing memory mapping...\n");
-    init_mmap();
-    terminal_writestring("Memory mapping initialized successfully!\n");
-    
-    // Initialize keyboard
-    terminal_writestring("Initializing keyboard...\n");
+    // Initialize subsystems
+    memory_init();
+    process_init();
+    fs_init();
+    graphics_init();
     keyboard_init();
-    terminal_writestring("Keyboard initialized successfully!\n");
+    mouse_init();
+    network_init();
+    sound_init();
     
-    terminal_setcolor(vga_entry_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("\nWelcome to MyOS!\n");
+    // Set up mouse callback
+    mouse_set_callback(handle_mouse_event);
     
-    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
-    terminal_writestring("System initialization complete.\n");
-    terminal_writestring("Features initialized:\n");
+    // Create initial windows
+    notepad_t* notepad = create_notepad(50, 50);
+    calculator_t* calculator = create_calculator(300, 50);
     
-    terminal_setcolor(vga_entry_color(VGA_COLOR_CYAN, VGA_COLOR_BLACK));
-    terminal_writestring("- VGA text mode\n");
-    terminal_writestring("- Global Descriptor Table (GDT)\n");
-    terminal_writestring("- Interrupt Descriptor Table (IDT)\n");
-    terminal_writestring("- Programmable Interrupt Controller (PIC)\n");
-    terminal_writestring("- Keyboard driver\n");
-    terminal_writestring("- Paging enabled\n");
-    terminal_writestring("- Kernel heap initialized\n");
-    terminal_writestring("- Memory mapping support\n");
+    // Create a test file
+    int fd = fs_open("/test.txt", FS_OPEN_CREATE | FS_OPEN_WRITE);
+    if (fd >= 0) {
+        const char* test_data = "Hello, File System!";
+        fs_write(fd, test_data, strlen(test_data));
+        fs_close(fd);
+    }
     
-    // Print memory information
-    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
-    print_memory_info();
+    // Create a test process
+    process_t* test_process = process_create("test", (void*)0x100000, PRIORITY_NORMAL, PROCESS_FLAG_USER);
     
-    // Test memory mapping
-    test_memory_mapping();
+    // Create a test sound buffer
+    int sound_buf = sound_buffer_create(SOUND_FORMAT_PCM16, SOUND_CHANNEL_STEREO,
+                                      SOUND_RATE_44100, 4096);
+    if (sound_buf >= 0) {
+        sound_buffer_set_callback(sound_buf, handle_sound_callback, NULL);
+    }
     
-    terminal_writestring("\nType something to test the keyboard:\n> ");
+    // Set up network interface
+    network_interface_t test_interface = {
+        .ip = ip_to_uint32("192.168.1.100"),
+        .netmask = ip_to_uint32("255.255.255.0"),
+        .gateway = ip_to_uint32("192.168.1.1")
+    };
+    network_interface_up(&test_interface);
     
-    // Enable interrupts
-    asm volatile("sti");
-    
-    // Main loop
+    // Main event loop
     while (1) {
-        // CPU can halt until next interrupt
-        asm volatile("hlt");
+        // Clear screen with background color
+        clear_screen(COLOR_BACKGROUND);
+        
+        // Draw all windows (from back to front)
+        window_t* window = window_list;
+        while (window) {
+            draw_window(window);
+            window = window->next;
+        }
+        
+        // Draw mouse cursor
+        draw_cursor(mouse_x, mouse_y);
+        
+        // Swap buffers to display frame
+        swap_buffers();
+        
+        // Handle keyboard input
+        char key = keyboard_get_key();
+        if (key) {
+            handle_window_key(key);
+        }
+        
+        // Update sound system
+        sound_update();
+        
+        // Run scheduler
+        scheduler_tick();
     }
 } 
