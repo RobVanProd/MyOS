@@ -13,7 +13,10 @@ KERNEL_SRCS = src/kernel/kernel.c \
               src/kernel/gdt.c \
               src/kernel/idt.c \
               src/kernel/pic.c \
-              src/kernel/keyboard.c
+              src/kernel/keyboard.c \
+              src/kernel/paging.c \
+              src/kernel/kheap.c \
+              src/kernel/mmap.c
 
 # Object files
 BOOT_OBJ = $(BOOT_SRC:.asm=.o)
