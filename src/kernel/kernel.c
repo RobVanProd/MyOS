@@ -14,29 +14,36 @@
 #include "storage/ata.h"
 #include "network/rtl8139.h"
 #include "test_process.h"
-#include "sound_buffer.h"  // Add sound_buffer.h include
+#include "sound_buffer.h"
 
 // Function declarations
 void init_kernel(void);
 void init_drivers(void);
-void handle_sound_callback(void* buffer, uint32_t length, void* user_data);
+void handle_sound_callback(void* buffer, uint32_t size);
 void irq12_handler(registers_t* regs);
-void test_process_management(void);  // Add test function declaration
+void test_process_entry(void);  // Test process entry point
 
 // Global variables
 static int sound_playing = 0;
 
 // Sound callback
-void handle_sound_callback(void* buffer, uint32_t length, void* user_data) {
+void handle_sound_callback(void* buffer, uint32_t size) {
     // Handle sound buffer filling here
     (void)buffer;   // Prevent unused parameter warning
-    (void)length;   // Prevent unused parameter warning
-    (void)user_data; // Prevent unused parameter warning
+    (void)size;     // Prevent unused parameter warning
 }
 
 // Mouse interrupt handler
 void irq12_handler(registers_t* regs) {
     mouse_handle_interrupt(regs);
+}
+
+// Test process entry point
+void test_process_entry(void) {
+    while(1) {
+        terminal_writestring("Test process running...\n");
+        process_sleep(1000);  // Sleep for 1 second
+    }
 }
 
 // Kernel entry point
@@ -56,13 +63,8 @@ void kernel_main(void) {
     // Initialize process management
     process_init();
     
-    // Run process management tests
-    terminal_writestring("\nStarting process management tests...\n");
-    test_process_management();
-    terminal_writestring("Process management tests completed.\n");
-    
     // Set up sound callback
-    sound_buffer_set_callback(0, handle_sound_callback, NULL);
+    sound_buffer_set_callback(0, handle_sound_callback);
     
     // Initialize mouse
     mouse_init();
@@ -75,14 +77,16 @@ void kernel_main(void) {
     terminal_writestring("Initializing system...\n");
     
     // Create test process
-    process_create("test", (void*)0x100000, PRIORITY_NORMAL, PROCESS_FLAG_USER);
+    process_create("test", test_process_entry);
     
     // Main kernel loop
     while (1) {
         // Process keyboard input
-        char c = keyboard_getchar();
-        if (c) {
-            terminal_putchar(c);
+        if (keyboard_status()) {
+            char c = keyboard_getchar();
+            if (c) {
+                terminal_putchar(c);
+            }
         }
         
         // Update sound system

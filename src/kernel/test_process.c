@@ -24,7 +24,7 @@ void test_process_management(void) {
     
     // Test 1: Create a simple process
     terminal_writestring("Test 1: Creating simple process\n");
-    process_t* proc = process_create("test1", test_process_function, PRIORITY_NORMAL, PROCESS_FLAG_USER);
+    process_t* proc = process_create("test1", test_process_function);
     if (!proc) {
         terminal_writestring("Failed to create process\n");
         return;
@@ -63,7 +63,7 @@ void test_process_management(void) {
     // Test 3: Multiple processes
     terminal_writestring("Test 3: Creating multiple processes\n");
     for (int i = 0; i < 3; i++) {
-        process_t* p = process_create("test_multi", test_process_function, PRIORITY_NORMAL, PROCESS_FLAG_USER);
+        process_t* p = process_create("test_multi", test_process_function);
         if (p) {
             terminal_writestring("Created process with PID ");
             terminal_writedec(p->pid);
@@ -73,7 +73,7 @@ void test_process_management(void) {
     
     // Test 4: Process kill
     terminal_writestring("Test 4: Testing process kill\n");
-    process_t* kill_proc = process_create("test_kill", test_process_function, PRIORITY_NORMAL, PROCESS_FLAG_USER);
+    process_t* kill_proc = process_create("test_kill", test_process_function);
     if (kill_proc) {
         terminal_writestring("Created process with PID ");
         terminal_writedec(kill_proc->pid);

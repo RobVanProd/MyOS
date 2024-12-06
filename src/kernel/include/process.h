@@ -17,8 +17,13 @@
 #define PROCESS_PRIORITY_NORMAL 1
 #define PROCESS_PRIORITY_HIGH   2
 
+// Process flags
+#define PROCESS_FLAG_KERNEL     0x00000001
+#define PROCESS_FLAG_USER       0x00000002
+
 // Maximum process name length
 #define MAX_PROCESS_NAME 32
+#define MAX_PROCESSES    64
 
 // Process context structure
 typedef struct {
@@ -41,9 +46,12 @@ typedef struct process {
     char name[MAX_PROCESS_NAME];           // Process name
     uint8_t state;                         // Process state
     uint8_t priority;                      // Process priority
+    uint8_t flags;                         // Process flags
     process_context_t context;             // CPU context
     uint32_t stack;                        // Kernel stack location
     uint32_t stack_size;                   // Stack size
+    uint32_t stack_base;                   // Stack base address
+    uint32_t* page_directory;              // Page directory
     struct process* parent;                // Parent process
     struct process* next;                  // Next process in queue
     uint32_t sleep_until;                  // Wake up time for sleeping processes
@@ -59,7 +67,14 @@ void process_sleep(uint32_t ms);
 void process_wake(process_t* process);
 void process_yield(void);
 
-// System calls
+// Scheduler functions
+void scheduler_init(void);
+void scheduler_add_process(process_t* process);
+void scheduler_remove_process(process_t* process);
+process_t* scheduler_next_process(void);
+
+// Process management functions
+process_t* process_get_by_pid(uint32_t pid);
 int sys_fork(void);
 int sys_exec(const char* path, char* const argv[]);
 void sys_exit(int status);
@@ -67,8 +82,7 @@ int sys_wait(int* status);
 int sys_getpid(void);
 int sys_kill(int pid, int sig);
 
-// External variables
+// Global variables
 extern process_t* current_process;
-extern process_t* ready_queue;
 
 #endif // PROCESS_H

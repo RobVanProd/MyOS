@@ -2,14 +2,12 @@
 #define SOUND_BUFFER_H
 
 #include <stdint.h>
-
-// Sound buffer callback function type
-typedef void (*sound_buffer_callback_t)(void* buffer, uint32_t length, void* user_data);
+#include "sound.h"
 
 // Sound buffer functions
 void sound_buffer_init(void);
-void sound_buffer_set_callback(uint8_t channel, sound_buffer_callback_t callback, void* user_data);
-void sound_buffer_clear_callback(uint8_t channel);
+void sound_buffer_set_callback(uint32_t buffer, sound_callback_t callback);
+void sound_buffer_clear_callback(uint32_t buffer);
 void sound_update(void);
 
 // Sound buffer configuration
@@ -21,7 +19,7 @@ void sound_update(void);
 // Sound buffer state
 extern uint8_t* sound_buffer;
 extern uint32_t sound_buffer_position;
-extern sound_buffer_callback_t sound_callbacks[SOUND_CHANNELS];
+extern sound_callback_t sound_callbacks[SOUND_CHANNELS];
 extern void* sound_callback_data[SOUND_CHANNELS];
 
 #endif // SOUND_BUFFER_H

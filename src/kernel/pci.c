@@ -1,7 +1,9 @@
 #include "pci.h"
+#include "hal.h"
+#include "string.h"
+#include "driver.h"
 #include "io.h"
 #include "terminal.h"
-#include <string.h>
 
 // PCI configuration addresses
 #define PCI_CONFIG_ADDRESS 0xCF8
@@ -13,8 +15,18 @@
 #define PCI_MAX_FUNCTIONS  8
 
 // List of detected PCI devices
-static pci_device_t pci_devices[256];
-static int num_pci_devices = 0;
+pci_device_t pci_devices[256];
+int num_pci_devices = 0;
+
+// Helper functions
+void int_to_hex_string(uint32_t value, char* buffer) {
+    const char hex_digits[] = "0123456789ABCDEF";
+    for (int i = 7; i >= 0; i--) {
+        buffer[i] = hex_digits[value & 0xF];
+        value >>= 4;
+    }
+    buffer[8] = '\0';
+}
 
 // Read from PCI configuration space
 uint32_t pci_read_config(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
@@ -32,68 +44,66 @@ void pci_write_config(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, u
     outl(PCI_CONFIG_DATA, value);
 }
 
-// Get device info from configuration space
-static void pci_get_device_info(uint8_t bus, uint8_t slot, uint8_t func, pci_device_t* dev) {
-    dev->vendor_id = pci_read_config(bus, slot, func, PCI_CONFIG_VENDOR_ID) & 0xFFFF;
-    dev->device_id = pci_read_config(bus, slot, func, PCI_CONFIG_DEVICE_ID) >> 16;
-    
-    uint32_t class_info = pci_read_config(bus, slot, func, PCI_CONFIG_REVISION_ID);
+// Get device information
+void pci_get_device_info(uint8_t bus, uint8_t slot, uint8_t func, pci_device_t* dev) {
+    uint32_t vendor_device = pci_read_config(bus, slot, func, PCI_VENDOR_ID);
+    dev->vendor_id = vendor_device & 0xFFFF;
+    dev->device_id = vendor_device >> 16;
+
+    uint32_t class_info = pci_read_config(bus, slot, func, PCI_REVISION_ID);
     dev->revision = class_info & 0xFF;
     dev->prog_if = (class_info >> 8) & 0xFF;
     dev->subclass = (class_info >> 16) & 0xFF;
     dev->class_code = (class_info >> 24) & 0xFF;
-    
-    uint32_t command_status = pci_read_config(bus, slot, func, PCI_CONFIG_COMMAND);
+
+    uint32_t command_status = pci_read_config(bus, slot, func, PCI_COMMAND);
     dev->command = command_status & 0xFFFF;
     dev->status = command_status >> 16;
-    
-    uint32_t bist_header = pci_read_config(bus, slot, func, PCI_CONFIG_CACHE_LINE);
+
+    uint32_t bist_header = pci_read_config(bus, slot, func, PCI_CACHE_LINE);
     dev->cache_line = bist_header & 0xFF;
     dev->latency = (bist_header >> 8) & 0xFF;
     dev->header_type = (bist_header >> 16) & 0xFF;
     dev->bist = (bist_header >> 24) & 0xFF;
-    
-    // Read BAR registers
+
+    // Read BARs
     for (int i = 0; i < 6; i++) {
-        dev->bar[i] = pci_read_config(bus, slot, func, PCI_CONFIG_BAR0 + i * 4);
+        dev->bar[i] = pci_read_config(bus, slot, func, PCI_BAR0 + i * 4);
     }
-    
-    dev->interrupt_line = pci_read_config(bus, slot, func, PCI_CONFIG_INTERRUPT_LINE) & 0xFF;
-    dev->interrupt_pin = (pci_read_config(bus, slot, func, PCI_CONFIG_INTERRUPT_PIN) >> 8) & 0xFF;
+
+    // Read interrupt information
+    uint32_t interrupt_info = pci_read_config(bus, slot, func, PCI_INTERRUPT_LINE);
+    dev->interrupt_line = interrupt_info & 0xFF;
+    dev->interrupt_pin = (interrupt_info >> 8) & 0xFF;
 }
 
-// Check if device exists
-static int pci_device_exists(uint8_t bus, uint8_t slot, uint8_t func) {
-    uint32_t vendor = pci_read_config(bus, slot, func, PCI_CONFIG_VENDOR_ID) & 0xFFFF;
+// Check if PCI device exists
+int pci_device_exists(uint8_t bus, uint8_t slot, uint8_t func) {
+    uint32_t vendor = pci_read_config(bus, slot, func, PCI_VENDOR_ID) & 0xFFFF;
     return vendor != 0xFFFF;
 }
 
-// Scan PCI function
-void pci_scan_function(uint8_t bus, uint8_t device, uint8_t function) {
-    if (!pci_device_exists(bus, device, function)) return;
-    if (num_pci_devices >= 256) return;
-    
-    pci_get_device_info(bus, device, function, &pci_devices[num_pci_devices]);
-    num_pci_devices++;
-    
-    // If this is a PCI-to-PCI bridge, scan the secondary bus
-    if (pci_devices[num_pci_devices-1].class_code == PCI_CLASS_BRIDGE &&
-        pci_devices[num_pci_devices-1].subclass == 0x04) {
-        uint32_t secondary_bus = (pci_read_config(bus, device, function, 0x18) >> 8) & 0xFF;
-        pci_scan_bus();
+// Scan PCI bus for devices
+void pci_scan_bus(void) {
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        pci_scan_device(bus, 0);
     }
 }
 
 // Scan PCI device
 void pci_scan_device(uint8_t bus, uint8_t device) {
-    if (!pci_device_exists(bus, device, 0)) return;
-    
-    pci_scan_function(bus, device, 0);
-    
-    // If this is a multi-function device, scan other functions
-    uint32_t header_type = pci_read_config(bus, device, 0, PCI_CONFIG_HEADER_TYPE);
+    uint8_t function = 0;
+
+    if (!pci_device_exists(bus, device, function)) {
+        return;
+    }
+
+    pci_scan_function(bus, device, function);
+    uint8_t header_type = pci_read_config(bus, device, 0, PCI_HEADER_TYPE) >> 16;
+
     if ((header_type & 0x80) != 0) {
-        for (int function = 1; function < PCI_MAX_FUNCTIONS; function++) {
+        /* Multi-function device */
+        for (function = 1; function < 8; function++) {
             if (pci_device_exists(bus, device, function)) {
                 pci_scan_function(bus, device, function);
             }
@@ -101,90 +111,85 @@ void pci_scan_device(uint8_t bus, uint8_t device) {
     }
 }
 
-// Scan PCI bus
-void pci_scan_bus(void) {
-    for (uint8_t device = 0; device < PCI_MAX_DEVICES; device++) {
-        pci_scan_device(0, device);
+// Scan PCI function
+void pci_scan_function(uint8_t bus, uint8_t device, uint8_t function) {
+    if (num_pci_devices >= 256) {
+        return;
     }
-}
 
-// Initialize PCI subsystem
-void pci_init(void) {
-    num_pci_devices = 0;
-    pci_scan_bus();
-}
+    pci_device_t* dev = &pci_devices[num_pci_devices++];
+    pci_get_device_info(bus, device, function, dev);
 
-// Find PCI device by vendor and device ID
-pci_device_t* pci_get_device(uint16_t vendor_id, uint16_t device_id) {
-    for (int i = 0; i < num_pci_devices; i++) {
-        if (pci_devices[i].vendor_id == vendor_id &&
-            pci_devices[i].device_id == device_id) {
-            return &pci_devices[i];
+    if (dev->class_code == PCI_CLASS_BRIDGE && dev->subclass == 0x04) {
+        uint32_t secondary_bus = (pci_read_config(bus, device, function, 0x18) >> 8) & 0xFF;
+        if (secondary_bus != 0) {
+            pci_scan_bus();
         }
     }
-    return NULL;
 }
 
-// Enable bus mastering for device
+// Enable bus mastering
 void pci_enable_bus_mastering(pci_device_t* dev) {
-    uint16_t command = dev->command;
-    command |= PCI_COMMAND_MASTER | PCI_COMMAND_IO | PCI_COMMAND_MEMORY;
-    pci_write_config(0, 0, 0, PCI_CONFIG_COMMAND, command);
-    dev->command = command;
+    (void)dev; // Unused parameter
+    uint32_t command = pci_read_config(0, 0, 0, PCI_COMMAND) & 0xFFFF;
+    command |= PCI_COMMAND_MASTER;
+    pci_write_config(0, 0, 0, PCI_COMMAND, command);
 }
 
 // Get BAR address
 uint32_t pci_get_bar_address(pci_device_t* dev, int bar) {
-    if (bar < 0 || bar > 5) return 0;
+    if (bar < 0 || bar > 5) {
+        return 0;
+    }
     
     uint32_t bar_value = dev->bar[bar];
     if (bar_value & PCI_BAR_TYPE_IO) {
-        return bar_value & ~0x3;
+        return bar_value & PCI_BAR_IO_MASK;
     } else {
-        return bar_value & ~0xF;
+        return bar_value & PCI_BAR_MEM_MASK;
     }
 }
 
 // Get BAR size
 uint32_t pci_get_bar_size(pci_device_t* dev, int bar) {
-    if (bar < 0 || bar > 5) return 0;
-    
-    uint32_t bar_value = dev->bar[bar];
-    uint32_t size;
-    
-    // Save original value
-    pci_write_config(0, 0, 0, PCI_CONFIG_BAR0 + bar * 4, 0xFFFFFFFF);
-    size = pci_read_config(0, 0, 0, PCI_CONFIG_BAR0 + bar * 4);
-    pci_write_config(0, 0, 0, PCI_CONFIG_BAR0 + bar * 4, bar_value);
-    
-    if (bar_value & PCI_BAR_TYPE_IO) {
-        size = ~(size & ~0x3) + 1;
-    } else {
-        size = ~(size & ~0xF) + 1;
+    if (bar < 0 || bar > 5) {
+        return 0;
     }
-    
-    return size;
-}
 
-// Get interrupt line
-int pci_get_interrupt_line(pci_device_t* dev) {
-    return dev->interrupt_line;
+    uint32_t old_value = dev->bar[bar];
+    pci_write_config(0, 0, 0, PCI_BAR0 + bar * 4, 0xFFFFFFFF);
+    uint32_t size = pci_read_config(0, 0, 0, PCI_BAR0 + bar * 4);
+    pci_write_config(0, 0, 0, PCI_BAR0 + bar * 4, old_value);
+
+    if (!size) {
+        return 0;
+    }
+
+    if (old_value & PCI_BAR_TYPE_IO) {
+        size &= PCI_BAR_IO_MASK;
+        size = ~size + 1;
+    } else {
+        size &= PCI_BAR_MEM_MASK;
+        size = ~size + 1;
+    }
+
+    return size;
 }
 
 // Enable interrupts
 void pci_enable_interrupts(pci_device_t* dev) {
-    uint16_t command = dev->command;
-    command &= ~PCI_COMMAND_INTERRUPT_DISABLE;
-    pci_write_config(0, 0, 0, PCI_CONFIG_COMMAND, command);
-    dev->command = command;
+    (void)dev; // Unused parameter
+    uint32_t command = pci_read_config(0, 0, 0, PCI_COMMAND) & 0xFFFF;
+    command &= ~PCI_COMMAND_INTX_DISABLE;
+    pci_write_config(0, 0, 0, PCI_COMMAND, command);
 }
 
 // Disable interrupts
 void pci_disable_interrupts(pci_device_t* dev) {
-    uint16_t command = dev->command;
-    command |= PCI_COMMAND_INTERRUPT_DISABLE;
-    pci_write_config(0, 0, 0, PCI_CONFIG_COMMAND, command);
-    dev->command = command;
+    (void)dev; // Unused parameter
+    uint32_t command = pci_read_config(0, 0, 0, PCI_COMMAND) & 0xFFFF;
+    command |= PCI_COMMAND_INTX_DISABLE;
+    pci_write_config(0, 0, 0, PCI_COMMAND, command);
 }
 
 // Get class string
@@ -212,65 +217,36 @@ const char* pci_class_string(uint8_t class_code) {
     }
 }
 
-// Get vendor string
-const char* pci_vendor_string(uint16_t vendor_id) {
-    switch (vendor_id) {
-        case 0x8086: return "Intel Corporation";
-        case 0x1022: return "Advanced Micro Devices";
-        case 0x10DE: return "NVIDIA Corporation";
-        case 0x1002: return "ATI Technologies";
-        case 0x10EC: return "Realtek Semiconductor";
-        case 0x1AF4: return "Red Hat, Inc.";
-        case 0x1B36: return "Red Hat, Inc.";
-        default: return "Unknown Vendor";
-    }
-}
-
 // Dump PCI device information
 void pci_dump_device(pci_device_t* dev) {
-    if (!dev) return;
+    char temp[9];
+    kprintf("PCI Device:\n");
     
-    terminal_writestring("PCI Device Information:\n");
-    
-    terminal_writestring("  Vendor ID: 0x");
-    char temp[32];
     int_to_hex_string(dev->vendor_id, temp);
-    terminal_writestring(temp);
-    terminal_writestring(" (");
-    terminal_writestring(pci_vendor_string(dev->vendor_id));
-    terminal_writestring(")\n");
+    kprintf("  Vendor ID: 0x%s\n", temp);
     
-    terminal_writestring("  Device ID: 0x");
     int_to_hex_string(dev->device_id, temp);
-    terminal_writestring(temp);
-    terminal_writestring("\n");
+    kprintf("  Device ID: 0x%s\n", temp);
     
-    terminal_writestring("  Class: ");
-    terminal_writestring(pci_class_string(dev->class_code));
-    terminal_writestring("\n");
+    kprintf("  Class: %s (0x%02x)\n", pci_class_string(dev->class_code), dev->class_code);
+    kprintf("  Subclass: 0x%02x\n", dev->subclass);
+    kprintf("  Prog IF: 0x%02x\n", dev->prog_if);
+    kprintf("  Revision: 0x%02x\n", dev->revision);
     
-    terminal_writestring("  Subclass: 0x");
-    int_to_hex_string(dev->subclass, temp);
-    terminal_writestring(temp);
-    terminal_writestring("\n");
+    kprintf("  Command: 0x%04x\n", dev->command);
+    kprintf("  Status: 0x%04x\n", dev->status);
     
-    terminal_writestring("  Prog IF: 0x");
-    int_to_hex_string(dev->prog_if, temp);
-    terminal_writestring(temp);
-    terminal_writestring("\n");
+    for (int i = 0; i < 6; i++) {
+        if (dev->bar[i]) {
+            int_to_hex_string(dev->bar[i], temp);
+            kprintf("  BAR%d: 0x%s\n", i, temp);
+        }
+    }
     
-    terminal_writestring("  Revision: 0x");
-    int_to_hex_string(dev->revision, temp);
-    terminal_writestring(temp);
-    terminal_writestring("\n");
-    
-    terminal_writestring("  Command: 0x");
-    int_to_hex_string(dev->command, temp);
-    terminal_writestring(temp);
-    terminal_writestring("\n");
-    
-    terminal_writestring("  Status: 0x");
-    int_to_hex_string(dev->status, temp);
-    terminal_writestring(temp);
-    terminal_writestring("\n");
+    if (dev->interrupt_line != 0xFF) {
+        kprintf("  IRQ Line: %d\n", dev->interrupt_line);
+    }
+    if (dev->interrupt_pin) {
+        kprintf("  IRQ Pin: %d\n", dev->interrupt_pin);
+    }
 }

@@ -1,10 +1,11 @@
 #ifndef TERMINAL_H
 #define TERMINAL_H
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 
-// Hardware text mode color constants
+// VGA hardware text mode color constants
 enum vga_color {
     VGA_COLOR_BLACK = 0,
     VGA_COLOR_BLUE = 1,
@@ -27,12 +28,15 @@ enum vga_color {
 // Terminal functions
 void terminal_initialize(void);
 void terminal_setcolor(uint8_t color);
-void terminal_putentryat(char c, uint8_t color, size_t x, size_t y);
 void terminal_putchar(char c);
 void terminal_write(const char* data, size_t size);
 void terminal_writestring(const char* data);
-void terminal_writedec(int num);
-void terminal_writehex(uint32_t num);
 void terminal_clear(void);
+void terminal_scroll(void);
+void terminal_newline(void);
 
-#endif // TERMINAL_H
+// Printf-like functions
+int kprintf(const char* format, ...);
+int kvprintf(const char* format, va_list args);
+
+#endif /* TERMINAL_H */

@@ -5,6 +5,7 @@
 #include "../io.h"
 #include "../pci.h"
 #include "../driver.h"
+#include "../network.h"
 
 // RTL8139 vendor and device IDs
 #define RTL8139_VENDOR_ID 0x10EC
@@ -43,11 +44,25 @@
 #define RTL8139_RCR_AB             0x00000008  // Accept broadcast
 #define RTL8139_RCR_WRAP           0x00000080  // Wrap
 #define RTL8139_RCR_RBLEN_32K      0x00000000  // 32K receive buffer
-#define RTL8139_RCR_MXDMA_UNLIMITED 0x00000700  // Unlimited DMA burst
+#define RTL8139_RCR_MXDMA          0x00000700  // Max DMA burst size mask
+#define RTL8139_RCR_MXDMA_16       0x00000000  // 16 bytes
+#define RTL8139_RCR_MXDMA_32       0x00000100  // 32 bytes
+#define RTL8139_RCR_MXDMA_64       0x00000200  // 64 bytes
+#define RTL8139_RCR_MXDMA_128      0x00000300  // 128 bytes
+#define RTL8139_RCR_MXDMA_256      0x00000400  // 256 bytes
+#define RTL8139_RCR_MXDMA_512      0x00000500  // 512 bytes
+#define RTL8139_RCR_MXDMA_1K       0x00000600  // 1K bytes
+#define RTL8139_RCR_MXDMA_UNLIM    0x00000700  // Unlimited
 
 // Transmit configuration register bits
 #define RTL8139_TCR_MXDMA_2048     0x00700000  // 2048 DMA burst
 #define RTL8139_TCR_IFG_NORMAL     0x00030000  // Normal interframe gap
+
+// Buffer sizes
+#define RTL8139_RX_BUF_SIZE        0x2000      // 8K
+#define RTL8139_RX_BUF_PAD         16          // Padding for alignment
+#define RTL8139_TX_BUF_SIZE        0x1000      // 4K
+#define RTL8139_TX_BUF_COUNT       4           // Number of transmit buffers
 
 // RTL8139 packet header
 typedef struct {
@@ -56,15 +71,19 @@ typedef struct {
 } __attribute__((packed)) rtl8139_header_t;
 
 // RTL8139 device structure
-typedef struct {
-    uint32_t io_base;              // I/O base address
-    uint8_t mac_addr[6];           // MAC address
-    uint8_t* rx_buffer;            // Receive buffer
-    uint32_t rx_buffer_size;       // Size of receive buffer
-    uint32_t current_rx_read;      // Current read position in rx buffer
-    void* tx_buffers[4];           // Transmit buffers
-    uint8_t current_tx_buffer;     // Current transmit buffer
-    uint32_t tx_buffer_size;       // Size of each transmit buffer
+typedef struct rtl8139_device {
+    driver_t driver;               // Base driver structure
+    uint8_t bus;                  // PCI bus number
+    uint8_t slot;                 // PCI slot number
+    uint8_t func;                 // PCI function number
+    uint32_t io_base;             // I/O base address
+    uint8_t mac_addr[6];          // MAC address
+    uint8_t* rx_buffer;           // Receive buffer
+    uint32_t rx_buffer_size;      // Size of receive buffer
+    uint32_t current_rx_read;     // Current read position in rx buffer
+    void* tx_buffers[4];          // Transmit buffers
+    uint8_t current_tx_buffer;    // Current transmit buffer
+    uint32_t tx_buffer_size;      // Size of each transmit buffer
 } rtl8139_device_t;
 
 // RTL8139 driver functions

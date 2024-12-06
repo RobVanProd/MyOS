@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "kheap.h"
 
 // Page size
 #define PAGE_SIZE 4096
@@ -35,10 +36,20 @@ typedef struct page_directory {
     uint32_t physical_addr;         // Physical address of tables_physical
 } page_directory_t;
 
-// Memory management functions
+// Memory operations
+void* memset(void* dest, int val, size_t len);
+void* memcpy(void* dest, const void* src, size_t len);
+void* memmove(void* dest, const void* src, size_t len);
+int memcmp(const void* s1, const void* s2, size_t len);
+
+// Memory management initialization
 void memory_init(void);
-void* alloc_page(void);
-void free_page(void* page);
+void paging_init(void);
+
+// Memory information
+size_t get_total_memory(void);
+size_t get_free_memory(void);
+size_t get_used_memory(void);
 
 // Page directory functions
 page_directory_t* create_page_directory(void);
@@ -49,14 +60,6 @@ page_directory_t* copy_page_directory(page_directory_t* src);
 // Memory mapping functions
 int allocate_region(page_directory_t* dir, uint32_t base, uint32_t size, uint32_t flags);
 int free_region(page_directory_t* dir, uint32_t base, uint32_t size);
-
-// Memory information functions
-size_t get_total_memory(void);
-size_t get_free_memory(void);
-size_t get_used_memory(void);
-
-// Memory manipulation functions
-void* krealloc(void* ptr, size_t size);
 
 // Memory mapping functions
 void* mmap(void* addr, uint32_t length, int prot, int flags, int fd, uint32_t offset);

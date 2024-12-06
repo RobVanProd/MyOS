@@ -60,9 +60,12 @@ void keyboard_init(void);
 void keyboard_handler(registers_t* regs);
 void keyboard_send_command(uint8_t command);
 uint8_t keyboard_read_status(void);
+uint8_t keyboard_status(void);
+char keyboard_getchar(void);
+void keyboard_wait(void);
 uint8_t keyboard_read_data(void);
-void keyboard_wait_write(void);
-void keyboard_wait_read(void);
+void keyboard_write_command(uint8_t cmd);
+void keyboard_write_data(uint8_t data);
 
 // Keyboard state
 extern uint8_t keyboard_scancode;
