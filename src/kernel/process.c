@@ -7,6 +7,20 @@ process_t* current_process = NULL;
 static uint32_t next_pid = 1;
 static process_t* processes[MAX_PROCESSES] = {NULL};
 
+// Define priority levels
+#define PROCESS_PRIORITY_LOW 0
+#define PROCESS_PRIORITY_NORMAL 1
+#define PROCESS_PRIORITY_HIGH 2
+
+// Define starvation threshold and quantum limits
+#define STARVATION_THRESHOLD 1000  // Ticks before priority boost
+#define MAX_QUANTUM 100           // Maximum time slice
+#define MIN_QUANTUM 20            // Minimum time slice
+
+// Process queue for each priority level
+static process_t* ready_queues[3] = {NULL, NULL, NULL};  // Low, Normal, High
+static uint32_t process_wait_times[MAX_PROCESSES] = {0};
+
 // Initialize process management
 void process_init(void) {
     // Create kernel process
@@ -87,15 +101,7 @@ process_t* process_create(const char* name, void (*entry)(void)) {
     process->context.eip = (uint32_t)entry;
     process->context.eflags = 0x202;  // Interrupts enabled
 
-    // Add to process list
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (!processes[i]) {
-            processes[i] = process;
-            break;
-        }
-    }
-
-    // Add to scheduler
+    // Add to process list and scheduler
     scheduler_add_process(process);
 
     return process;
@@ -131,86 +137,129 @@ void process_destroy(process_t* process) {
 // Switch to a process
 void process_switch(process_t* next) {
     if (!next || next == current_process) return;
-
+    
+    // Disable interrupts during context switch
+    asm volatile("cli");
+    
     process_t* prev = current_process;
     
     // Save current context if there is a previous process
     if (prev && prev->state != PROCESS_STATE_ZOMBIE) {
-        __asm__ volatile(
-            "mov %%eax, %0\n\t"
-            "mov %%ebx, %1\n\t"
-            "mov %%ecx, %2\n\t"
-            "mov %%edx, %3\n\t"
-            "mov %%esi, %4\n\t"
-            "mov %%edi, %5\n\t"
-            "mov %%ebp, %6\n\t"
-            : "=m"(prev->context.eax),
-              "=m"(prev->context.ebx),
-              "=m"(prev->context.ecx),
-              "=m"(prev->context.edx),
-              "=m"(prev->context.esi),
-              "=m"(prev->context.edi),
-              "=m"(prev->context.ebp)
-            : : "memory"
+        // Save CPU registers
+        asm volatile(
+            "mov %%esp, %0\n"
+            "mov %%ebp, %1\n"
+            "pushf\n"
+            "pop %2\n"
+            : "=m"(prev->context.esp),
+              "=m"(prev->context.ebp),
+              "=m"(prev->context.eflags)
+            :
+            : "memory"
         );
-
-        __asm__ volatile(
-            "pushf\n\t"
-            "pop %%eax\n\t"
-            "mov %%eax, %0\n\t"
-            : "=m"(prev->context.eflags)
-            : : "eax"
+        
+        // Save segment registers
+        asm volatile(
+            "mov %%cs, %0\n"
+            "mov %%ds, %1\n"
+            "mov %%es, %2\n"
+            "mov %%fs, %3\n"
+            "mov %%gs, %4\n"
+            : "=m"(prev->context.cs),
+              "=m"(prev->context.ds),
+              "=m"(prev->context.es),
+              "=m"(prev->context.fs),
+              "=m"(prev->context.gs)
+            :
+            : "memory"
         );
-
-        prev->context.esp = (uint32_t)&next;
-        prev->context.eip = (uint32_t)&&return_label;  // Save return address
+        
+        // Save FPU state if used
+        if (prev->flags & PROCESS_FLAG_FPU) {
+            asm volatile("fxsave %0" : "=m"(prev->fpu_state));
+        }
     }
-
+    
     // Update process states
-    if (prev) prev->state = PROCESS_STATE_READY;
+    if (prev) {
+        if (prev->state == PROCESS_STATE_RUNNING) {
+            prev->state = PROCESS_STATE_READY;
+        }
+        prev->cpu_time += get_timer_ticks() - prev->last_switch;
+    }
+    
     next->state = PROCESS_STATE_RUNNING;
+    next->last_switch = get_timer_ticks();
     current_process = next;
-
+    
     // Switch page directory if different
     if (!prev || prev->page_directory != next->page_directory) {
         switch_page_directory(next->page_directory);
     }
-
+    
+    // Restore FPU state if needed
+    if (next->flags & PROCESS_FLAG_FPU) {
+        asm volatile("fxrstor %0" : : "m"(next->fpu_state));
+    }
+    
+    // Switch kernel stack
+    tss_set_kernel_stack(next->kernel_stack_top);
+    
     // Load next context
-    __asm__ volatile(
-        "mov %0, %%eax\n\t"
-        "mov %1, %%ebx\n\t"
-        "mov %2, %%ecx\n\t"
-        "mov %3, %%edx\n\t"
-        "mov %4, %%esi\n\t"
-        "mov %5, %%edi\n\t"
-        "mov %6, %%ebp\n\t"
-        "mov %7, %%esp\n\t"
-        : : "m"(next->context.eax),
-            "m"(next->context.ebx),
-            "m"(next->context.ecx),
-            "m"(next->context.edx),
-            "m"(next->context.esi),
-            "m"(next->context.edi),
-            "m"(next->context.ebp),
-            "m"(next->context.esp)
+    asm volatile(
+        "mov %0, %%esp\n"
+        "mov %1, %%ebp\n"
+        "push %2\n"
+        "popf\n"
+        : 
+        : "m"(next->context.esp),
+          "m"(next->context.ebp),
+          "m"(next->context.eflags)
         : "memory"
     );
-
-    __asm__ volatile(
-        "push %0\n\t"
-        "popf\n\t"
-        : : "m"(next->context.eflags)
+    
+    // Restore segment registers
+    asm volatile(
+        "mov %0, %%ds\n"
+        "mov %1, %%es\n"
+        "mov %2, %%fs\n"
+        "mov %3, %%gs\n"
+        : 
+        : "m"(next->context.ds),
+          "m"(next->context.es),
+          "m"(next->context.fs),
+          "m"(next->context.gs)
+        : "memory"
     );
-
-    // Jump to next process's instruction pointer
-    __asm__ volatile(
-        "jmp *%0\n\t"
-        : : "m"(next->context.eip)
-    );
-
-return_label:
-    return;
+    
+    // Re-enable interrupts
+    asm volatile("sti");
+    
+    // If returning to user mode, use iret
+    if (next->flags & PROCESS_FLAG_USER) {
+        asm volatile(
+            "pushw %0\n"        // ss
+            "pushl %1\n"        // esp
+            "pushfl\n"          // eflags
+            "pushw %2\n"        // cs
+            "pushl %3\n"        // eip
+            "iret\n"
+            : 
+            : "m"(next->context.ss),
+              "m"(next->context.esp),
+              "m"(next->context.cs),
+              "m"(next->context.eip)
+            : "memory"
+        );
+    } else {
+        // Kernel mode - just jump
+        asm volatile(
+            "jmp *%0\n"
+            : 
+            : "m"(next->context.eip)
+            : "memory"
+        );
+    }
 }
 
 // Yield to next process
@@ -235,6 +284,8 @@ process_t* process_get_by_pid(uint32_t pid) {
 void scheduler_init(void) {
     // Initialize scheduler data structures
     memset(processes, 0, sizeof(processes));
+    memset(ready_queues, 0, sizeof(ready_queues));
+    memset(process_wait_times, 0, sizeof(process_wait_times));
     current_process = NULL;
 }
 
@@ -243,63 +294,153 @@ void scheduler_add_process(process_t* process) {
     if (!process) return;
 
     // Find empty slot in process array
+    int slot = -1;
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (!processes[i]) {
             processes[i] = process;
-            process->state = PROCESS_STATE_READY;
-            process->next = NULL;
-            return;
+            slot = i;
+            break;
         }
     }
 
-    // No empty slots found
-    terminal_writestring("Error: Maximum number of processes reached\n");
-    process_destroy(process);
+    if (slot == -1) {
+        kprintf("Error: Maximum number of processes reached\n");
+        process_destroy(process);
+        return;
+    }
+
+    // Add to priority queue
+    process->state = PROCESS_STATE_READY;
+    process->next = NULL;
+    process_wait_times[slot] = 0;
+
+    int priority = process->priority;
+    if (priority < 0) priority = 0;
+    if (priority > 2) priority = 2;
+
+    if (!ready_queues[priority]) {
+        ready_queues[priority] = process;
+    } else {
+        process_t* current = ready_queues[priority];
+        while (current->next) {
+            current = current->next;
+        }
+        current->next = process;
+    }
 }
 
 // Remove process from scheduler
 void scheduler_remove_process(process_t* process) {
     if (!process) return;
 
-    // Find and remove process from array
+    // Remove from process array and clear wait time
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (processes[i] == process) {
             processes[i] = NULL;
-            process->state = PROCESS_STATE_ZOMBIE;
-            process->next = NULL;
+            process_wait_times[i] = 0;
+            break;
+        }
+    }
 
-            // If removing current process, schedule next one
-            if (process == current_process) {
-                process_t* next = scheduler_next_process();
-                if (next && next != process) {
-                    process_switch(next);
-                }
-            }
-            return;
+    // Remove from priority queue
+    int priority = process->priority;
+    if (priority < 0) priority = 0;
+    if (priority > 2) priority = 2;
+
+    if (ready_queues[priority] == process) {
+        ready_queues[priority] = process->next;
+    } else {
+        process_t* current = ready_queues[priority];
+        while (current && current->next != process) {
+            current = current->next;
+        }
+        if (current) {
+            current->next = process->next;
+        }
+    }
+
+    process->state = PROCESS_STATE_ZOMBIE;
+    process->next = NULL;
+
+    // If removing current process, schedule next one
+    if (process == current_process) {
+        process_t* next = scheduler_next_process();
+        if (next && next != process) {
+            process_switch(next);
         }
     }
 }
 
-// Get next process to run using round-robin scheduling
+// Get next process to run using priority scheduling with anti-starvation
 process_t* scheduler_next_process(void) {
-    static int last_scheduled = -1;
+    static uint32_t last_schedule_time = 0;
+    uint32_t current_time = get_timer_ticks();
     
-    // Start from the next process after the last scheduled one
-    int start = (last_scheduled + 1) % MAX_PROCESSES;
-    int i = start;
-
-    do {
-        if (processes[i] && 
-            processes[i]->state == PROCESS_STATE_READY && 
-            processes[i] != current_process) {
-            last_scheduled = i;
-            return processes[i];
+    // Update wait times and check for starvation
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i] && processes[i] != current_process && 
+            processes[i]->state == PROCESS_STATE_READY) {
+            process_wait_times[i] += current_time - last_schedule_time;
+            
+            // Boost priority if waiting too long
+            if (process_wait_times[i] > STARVATION_THRESHOLD && 
+                processes[i]->priority < PROCESS_PRIORITY_HIGH) {
+                // Remove from current queue
+                scheduler_remove_process(processes[i]);
+                // Boost priority and re-add
+                processes[i]->priority++;
+                scheduler_add_process(processes[i]);
+                process_wait_times[i] = 0;
+            }
         }
-        i = (i + 1) % MAX_PROCESSES;
-    } while (i != start);
+    }
+    
+    last_schedule_time = current_time;
 
-    // If no other ready process found, continue with current process
+    // Try to find a process in each priority level
+    for (int priority = PROCESS_PRIORITY_HIGH; priority >= PROCESS_PRIORITY_LOW; priority--) {
+        process_t* candidate = ready_queues[priority];
+        while (candidate) {
+            if (candidate->state == PROCESS_STATE_READY && candidate != current_process) {
+                // Move to end of queue (round robin within priority)
+                scheduler_remove_process(candidate);
+                scheduler_add_process(candidate);
+                return candidate;
+            }
+            candidate = candidate->next;
+        }
+    }
+
+    // If no other process found, continue with current process
     return current_process;
+}
+
+// Schedule next process
+void process_schedule(void) {
+    if (!current_process) return;
+
+    // Calculate quantum based on priority
+    uint32_t quantum = MAX_QUANTUM;
+    switch (current_process->priority) {
+        case PROCESS_PRIORITY_HIGH:
+            quantum = MAX_QUANTUM;
+            break;
+        case PROCESS_PRIORITY_NORMAL:
+            quantum = (MAX_QUANTUM + MIN_QUANTUM) / 2;
+            break;
+        case PROCESS_PRIORITY_LOW:
+            quantum = MIN_QUANTUM;
+            break;
+    }
+
+    // Check if quantum expired
+    uint32_t current_time = get_timer_ticks();
+    if (current_time - current_process->last_switch >= quantum) {
+        process_t* next = scheduler_next_process();
+        if (next && next != current_process) {
+            process_switch(next);
+        }
+    }
 }
 
 // System call implementations

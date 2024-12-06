@@ -28,13 +28,13 @@ char* strtok(char* str, const char* delim);
 char* strtok_r(char* str, const char* delim, char** saveptr);
 
 // String conversion functions
-void int_to_string(int value, char* buffer);
-void uint_to_string(unsigned int value, char* buffer);
+void int_to_string(int32_t value, char* buffer);
+void uint_to_string(uint32_t value, char* buffer);
 void int_to_hex_string(uint32_t value, char* buffer);
-void long_to_string(long value, char* buffer);
-void ulong_to_string(unsigned long value, char* buffer);
 int atoi(const char* str);
 long atol(const char* str);
+unsigned long strtoul(const char* str, char** endptr, int base);
+long strtol(const char* str, char** endptr, int base);
 
 // String utility functions
 char* strdup(const char* s);

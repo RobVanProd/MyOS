@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "interrupt.h"
 #include "io.h"
+#include "terminal.h"
 
 // IDT entry structure
 struct idt_entry {
@@ -58,6 +59,49 @@ extern void isr29(void);
 extern void isr30(void);
 extern void isr31(void);
 
+// Interrupt nesting level
+static volatile int interrupt_depth = 0;
+static volatile int in_critical_section = 0;
+
+// Interrupt handlers
+static interrupt_handler_t interrupt_handlers[256];
+
+// Error messages for exceptions
+static const char* exception_messages[] = {
+    "Division By Zero",
+    "Debug",
+    "Non Maskable Interrupt",
+    "Breakpoint",
+    "Into Detected Overflow",
+    "Out of Bounds",
+    "Invalid Opcode",
+    "No Coprocessor",
+    "Double Fault",
+    "Coprocessor Segment Overrun",
+    "Bad TSS",
+    "Segment Not Present",
+    "Stack Fault",
+    "General Protection Fault",
+    "Page Fault",
+    "Unknown Interrupt",
+    "Coprocessor Fault",
+    "Alignment Check",
+    "Machine Check",
+    "SIMD Floating-Point Exception",
+    "Virtualization Exception",
+    "Control Protection Exception",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved"
+};
+
 // Initialize IDT entry
 static void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_low = base & 0xFFFF;
@@ -73,10 +117,9 @@ void interrupt_init(void) {
     idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
     idtp.base = (uint32_t)&idt;
 
-    // Clear IDT
-    for (int i = 0; i < 256; i++) {
-        idt_set_gate(i, 0, 0, 0);
-    }
+    // Clear IDT and handlers
+    memset(&idt, 0, sizeof(struct idt_entry) * 256);
+    memset(&interrupt_handlers, 0, sizeof(interrupt_handlers));
 
     // Install ISR handlers
     idt_set_gate(0, (uint32_t)isr0, 0x08, 0x8E);
@@ -113,16 +156,7 @@ void interrupt_init(void) {
     idt_set_gate(31, (uint32_t)isr31, 0x08, 0x8E);
 
     // Remap PIC
-    outb(0x20, 0x11);
-    outb(0xA0, 0x11);
-    outb(0x21, 0x20);
-    outb(0xA1, 0x28);
-    outb(0x21, 0x04);
-    outb(0xA1, 0x02);
-    outb(0x21, 0x01);
-    outb(0xA1, 0x01);
-    outb(0x21, 0x0);
-    outb(0xA1, 0x0);
+    pic_remap(0x20, 0x28);
 
     // Load IDT
     idt_load(&idtp);
@@ -131,33 +165,112 @@ void interrupt_init(void) {
     __asm__ volatile("sti");
 }
 
-#include "interrupt.h"
-#include "io.h"
-
-// Interrupt handlers
-static interrupt_handler_t interrupt_handlers[256];
-
 // Register an interrupt handler
 void register_interrupt_handler(uint8_t n, interrupt_handler_t handler) {
-    interrupt_handlers[n] = handler;
+    if (handler) {
+        interrupt_handlers[n] = handler;
+    }
+}
+
+// Enter critical section
+void enter_critical_section(void) {
+    __asm__ volatile("cli");
+    in_critical_section++;
+}
+
+// Exit critical section
+void exit_critical_section(void) {
+    if (--in_critical_section == 0) {
+        __asm__ volatile("sti");
+    }
 }
 
 // Common interrupt handler
 void isr_handler(registers_t regs) {
+    interrupt_depth++;
+
+    // Handle CPU exceptions (interrupts 0-31)
+    if (regs.int_no < 32) {
+        if (regs.int_no < sizeof(exception_messages) / sizeof(char*)) {
+            kprintf("Exception: %s\n", exception_messages[regs.int_no]);
+        } else {
+            kprintf("Unknown exception %d\n", regs.int_no);
+        }
+
+        kprintf("Error code: %d\n", regs.err_code);
+        kprintf("EIP: 0x%x\n", regs.eip);
+        kprintf("CS: 0x%x\n", regs.cs);
+        kprintf("EFLAGS: 0x%x\n", regs.eflags);
+
+        // If we're in user mode, also print SS and ESP
+        if ((regs.cs & 0x3) == 3) {
+            kprintf("ESP: 0x%x\n", regs.useresp);
+            kprintf("SS: 0x%x\n", regs.ss);
+        }
+
+        // Handle fatal exceptions
+        if (regs.int_no == 8 || regs.int_no == 13 || regs.int_no == 14) {
+            kprintf("Fatal exception. System halted.\n");
+            for(;;);
+        }
+    }
+
+    // Call registered handler if available
     if (interrupt_handlers[regs.int_no]) {
         interrupt_handlers[regs.int_no](regs);
+    } else if (regs.int_no >= 32) {
+        kprintf("Unhandled interrupt: %d\n", regs.int_no);
+    }
+
+    interrupt_depth--;
+
+    // If we're returning to user mode and there are pending signals,
+    // handle them now
+    if (interrupt_depth == 0 && (regs.cs & 0x3) == 3) {
+        check_pending_signals();
     }
 }
 
 // IRQ handler
 void irq_handler(registers_t regs) {
+    interrupt_depth++;
+
     // Send an EOI (end of interrupt) signal to the PICs
     if (regs.int_no >= 40) {
         outb(0xA0, 0x20); // Send reset signal to slave
     }
     outb(0x20, 0x20); // Send reset signal to master
 
+    // Call the registered handler if available
     if (interrupt_handlers[regs.int_no]) {
         interrupt_handlers[regs.int_no](regs);
     }
+
+    interrupt_depth--;
+
+    // If we're returning to user mode and there are pending signals,
+    // handle them now
+    if (interrupt_depth == 0 && (regs.cs & 0x3) == 3) {
+        check_pending_signals();
+    }
+}
+
+// Get current interrupt depth
+int get_interrupt_depth(void) {
+    return interrupt_depth;
+}
+
+// Check if we're in an interrupt context
+bool is_interrupt_context(void) {
+    return interrupt_depth > 0;
+}
+
+// Disable interrupts
+void disable_interrupts(void) {
+    __asm__ volatile("cli");
+}
+
+// Enable interrupts
+void enable_interrupts(void) {
+    __asm__ volatile("sti");
 }

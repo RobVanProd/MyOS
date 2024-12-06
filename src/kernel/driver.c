@@ -120,90 +120,97 @@ driver_t* driver_find_by_type(driver_type_t type) {
     return NULL;
 }
 
-// Initialize all drivers
-int driver_init_all(void) {
-    int result = DRIVER_SUCCESS;
-    driver_t* driver = driver_list;
+// Convert integer to string (local helper function)
+static void local_int_to_string(uint32_t value, char* str) {
+    char temp[32];
+    int i = 0;
     
-    while (driver) {
-        if (!DRIVER_TEST_FLAG(driver, DRIVER_FLAG_INITIALIZED)) {
-            if (driver->init) {
-                result = driver->init(driver);
-                if (result != DRIVER_SUCCESS) {
-                    DRIVER_SET_FLAG(driver, DRIVER_FLAG_ERROR);
-                    return result;
-                }
-            }
-            DRIVER_SET_FLAG(driver, DRIVER_FLAG_INITIALIZED);
-        }
-        driver = driver->next;
-    }
-    
-    return result;
-}
-
-// Cleanup all drivers
-int driver_cleanup_all(void) {
-    int result = DRIVER_SUCCESS;
-    driver_t* driver = driver_list;
-    
-    while (driver) {
-        if (DRIVER_TEST_FLAG(driver, DRIVER_FLAG_INITIALIZED)) {
-            if (driver->cleanup) {
-                result = driver->cleanup(driver);
-                if (result != DRIVER_SUCCESS) {
-                    DRIVER_SET_FLAG(driver, DRIVER_FLAG_ERROR);
-                    return result;
-                }
-            }
-            DRIVER_CLEAR_FLAG(driver, DRIVER_FLAG_INITIALIZED);
-        }
-        driver = driver->next;
-    }
-    
-    return result;
-}
-
-// Convert integer to string
-static void int_to_string(uint32_t value, char* str) {
+    // Handle 0 case
     if (value == 0) {
         str[0] = '0';
         str[1] = '\0';
         return;
     }
     
-    int i = 0;
+    // Convert digits
     while (value > 0) {
-        str[i++] = '0' + (value % 10);
+        temp[i++] = '0' + (value % 10);
         value /= 10;
     }
-    str[i] = '\0';
     
-    // Reverse the string
-    for (int j = 0; j < i / 2; j++) {
-        char temp = str[j];
-        str[j] = str[i - 1 - j];
-        str[i - 1 - j] = temp;
+    // Reverse and copy
+    int j;
+    for (j = 0; j < i; j++) {
+        str[j] = temp[i - 1 - j];
     }
+    str[j] = '\0';
 }
 
-// Convert integer to hex string
-static void int_to_hex_string(uint32_t value, char* str) {
-    const char* hex = "0123456789ABCDEF";
+// Convert integer to hex string (local helper function)
+static void local_int_to_hex_string(uint32_t value, char* str) {
+    const char hex_digits[] = "0123456789ABCDEF";
+    char temp[32];
     int i = 0;
     
-    str[i++] = '0';
-    str[i++] = 'x';
-    
-    bool leading_zero = true;
-    for (int j = 28; j >= 0; j -= 4) {
-        uint8_t digit = (value >> j) & 0xF;
-        if (digit != 0 || !leading_zero || j == 0) {
-            str[i++] = hex[digit];
-            leading_zero = false;
-        }
+    // Handle 0 case
+    if (value == 0) {
+        str[0] = '0';
+        str[1] = '\0';
+        return;
     }
-    str[i] = '\0';
+    
+    // Convert digits
+    while (value > 0) {
+        temp[i++] = hex_digits[value & 0xF];
+        value >>= 4;
+    }
+    
+    // Add 0x prefix
+    str[0] = '0';
+    str[1] = 'x';
+    
+    // Reverse and copy
+    int j;
+    for (j = 0; j < i; j++) {
+        str[j + 2] = temp[i - 1 - j];
+    }
+    str[j + 2] = '\0';
+}
+
+// Initialize all drivers
+int driver_init_all(void) {
+    int status = 0;
+    driver_t* driver = driver_list;
+    
+    while (driver) {
+        if (driver->init) {
+            int ret = driver->init(driver);
+            if (ret != 0) {
+                status = ret;
+            }
+        }
+        driver = driver->next;
+    }
+    
+    return status;
+}
+
+// Cleanup all drivers
+int driver_cleanup_all(void) {
+    int status = 0;
+    driver_t* driver = driver_list;
+    
+    while (driver) {
+        if (driver->cleanup) {
+            int ret = driver->cleanup(driver);
+            if (ret != 0) {
+                status = ret;
+            }
+        }
+        driver = driver->next;
+    }
+    
+    return status;
 }
 
 // Dump driver information
@@ -222,100 +229,69 @@ void driver_dump_info(driver_t* driver) {
     terminal_writestring("\n");
     
     terminal_writestring("  Version: ");
-    int_to_string(driver->version >> 8, version);
+    local_int_to_string(DRIVER_VERSION_MAJOR, version);
     terminal_writestring(version);
     terminal_writestring(".");
-    int_to_string(driver->version & 0xFF, version);
+    local_int_to_string(DRIVER_VERSION_MINOR, version);
+    terminal_writestring(version);
+    terminal_writestring(".");
+    local_int_to_string(DRIVER_VERSION_PATCH, version);
     terminal_writestring(version);
     terminal_writestring("\n");
     
     terminal_writestring("  Type: ");
-    terminal_writestring(driver_type_strings[driver->type]);
+    local_int_to_string(driver->type, version);
+    terminal_writestring(version);
     terminal_writestring("\n");
     
     terminal_writestring("  Flags: ");
-    int_to_hex_string(driver->flags, version);
+    local_int_to_hex_string(driver->flags, version);
     terminal_writestring(version);
     terminal_writestring("\n");
     
-    terminal_writestring("  Capabilities:\n");
-    terminal_writestring("    Max Transfer Size: ");
-    int_to_string(driver->caps.max_transfer_size, version);
+    terminal_writestring("  I/O Base: ");
+    local_int_to_hex_string(driver->config.io_base, version);
     terminal_writestring(version);
     terminal_writestring("\n");
     
-    terminal_writestring("    Buffer Alignment: ");
-    int_to_string(driver->caps.buffer_alignment, version);
+    terminal_writestring("  I/O Size: ");
+    local_int_to_string(driver->config.io_size, version);
     terminal_writestring(version);
     terminal_writestring("\n");
     
-    terminal_writestring("    DMA Support: ");
-    terminal_writestring(driver->caps.dma_support ? "Yes" : "No");
+    terminal_writestring("  Memory Base: ");
+    local_int_to_hex_string(driver->config.mem_base, version);
+    terminal_writestring(version);
     terminal_writestring("\n");
     
-    terminal_writestring("    Interrupt Support: ");
-    terminal_writestring(driver->caps.interrupt_support ? "Yes" : "No");
+    terminal_writestring("  Memory Size: ");
+    local_int_to_string(driver->config.mem_size, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  IRQ: ");
+    local_int_to_string(driver->config.irq, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  DMA Channel: ");
+    local_int_to_string(driver->config.dma_channel, version);
+    terminal_writestring(version);
     terminal_writestring("\n");
     
     terminal_writestring("  Statistics:\n");
     terminal_writestring("    Bytes Read: ");
-    int_to_string(driver->stats.bytes_read, version);
+    local_int_to_string(driver->stats.bytes_read, version);
     terminal_writestring(version);
     terminal_writestring("\n");
     
     terminal_writestring("    Bytes Written: ");
-    int_to_string(driver->stats.bytes_written, version);
+    local_int_to_string(driver->stats.bytes_written, version);
     terminal_writestring(version);
     terminal_writestring("\n");
     
     terminal_writestring("    I/O Errors: ");
-    int_to_string(driver->stats.io_errors, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    Interrupts: ");
-    int_to_string(driver->stats.interrupts, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    DMA Transfers: ");
-    int_to_string(driver->stats.dma_transfers, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    Uptime: ");
-    int_to_string(driver->stats.uptime, version);
-    terminal_writestring(version);
-    terminal_writestring(" seconds\n");
-    
-    terminal_writestring("  Configuration:\n");
-    terminal_writestring("    I/O Base: ");
-    int_to_hex_string(driver->config.io_base, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    I/O Size: ");
-    int_to_string(driver->config.io_size, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    Memory Base: ");
-    int_to_hex_string(driver->config.mem_base, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    Memory Size: ");
-    int_to_string(driver->config.mem_size, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    IRQ: ");
-    int_to_string(driver->config.irq, version);
-    terminal_writestring(version);
-    terminal_writestring("\n");
-    
-    terminal_writestring("    DMA Channel: ");
-    int_to_string(driver->config.dma_channel, version);
+    local_int_to_string(driver->stats.io_errors, version);
     terminal_writestring(version);
     terminal_writestring("\n");
 }

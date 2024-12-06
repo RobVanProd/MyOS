@@ -153,34 +153,79 @@ page_t *get_page(uint32_t address, int make, page_directory_t *dir) {
     return 0;
 }
 
-void page_fault_handler(void) {
-    // A page fault has occurred
-    // The faulting address is stored in the CR2 register
+void page_fault_handler(registers_t* regs) {
+    // Get the faulting address from CR2
     uint32_t faulting_address;
     asm volatile("mov %%cr2, %0" : "=r" (faulting_address));
     
     // The error code gives us details of what happened
-    int present = 0;   // Page not present
-    int rw = 0;        // Write operation?
-    int us = 0;        // Processor was in user-mode?
-    int reserved = 0;  // Overwritten CPU-reserved bits of page entry?
+    int present = regs->err_code & 0x1;    // Page present
+    int rw = regs->err_code & 0x2;         // Write operation?
+    int us = regs->err_code & 0x4;         // User mode?
+    int reserved = regs->err_code & 0x8;   // Reserved bits overwritten?
+    int id = regs->err_code & 0x10;        // Instruction fetch?
     
-    terminal_writestring("Page fault! ( ");
-    if (present) terminal_writestring("present ");
-    if (rw) terminal_writestring("read-only ");
-    if (us) terminal_writestring("user-mode ");
-    if (reserved) terminal_writestring("reserved ");
-    terminal_writestring(") at address 0x");
-    
-    // Print the address in hexadecimal
-    char hex[9];
-    for (int i = 7; i >= 0; i--) {
-        int digit = (faulting_address >> (i * 4)) & 0xF;
-        hex[7-i] = digit < 10 ? digit + '0' : digit - 10 + 'A';
+    // First try to handle it as a memory mapping fault
+    if (!present && handle_mmap_fault(faulting_address)) {
+        return; // Successfully handled by memory mapping
     }
-    hex[8] = '\0';
-    terminal_writestring(hex);
-    terminal_writestring("\n");
+    
+    // Check if it's a kernel page fault
+    if (!us && !current_process->flags & PROCESS_FLAG_KERNEL) {
+        kprintf("Page fault in kernel mode! System halted.\n");
+        for(;;);
+    }
+    
+    // Check if it's a stack growth request
+    if (!present && !reserved && current_process) {
+        uint32_t stack_base = current_process->stack_base;
+        uint32_t stack_limit = stack_base - MAX_STACK_SIZE;
+        
+        if (faulting_address >= stack_limit && faulting_address < stack_base) {
+            // Align address to page boundary
+            uint32_t page_addr = faulting_address & ~0xFFF;
+            
+            // Allocate new stack page
+            if (allocate_region(current_directory, page_addr, PAGE_SIZE, 
+                              PAGE_PRESENT | PAGE_WRITE | PAGE_USER)) {
+                return; // Stack growth successful
+            }
+        }
+    }
+    
+    // If we get here, it's a real page fault
+    kprintf("Page fault at 0x%x ( ", faulting_address);
+    if (present) kprintf("present ");
+    if (rw) kprintf("read-only ");
+    if (us) kprintf("user-mode ");
+    if (reserved) kprintf("reserved ");
+    if (id) kprintf("instruction-fetch ");
+    kprintf(")\n");
+    
+    // Print call stack if available
+    if (current_process) {
+        kprintf("Process: %s (PID: %d)\n", 
+                current_process->name, current_process->pid);
+        kprintf("EIP: 0x%x\n", regs->eip);
+        
+        // Print stack trace
+        uint32_t* ebp = (uint32_t*)regs->ebp;
+        kprintf("Stack trace:\n");
+        for (int i = 0; i < 5 && ebp; i++) {
+            uint32_t eip = ebp[1];
+            kprintf("  [%d] 0x%x\n", i, eip);
+            ebp = (uint32_t*)ebp[0];
+        }
+    }
+    
+    // Halt the system or kill the process
+    if (!current_process || current_process->flags & PROCESS_FLAG_KERNEL) {
+        kprintf("Kernel panic: unhandled page fault\n");
+        for(;;);
+    } else {
+        kprintf("Killing process %s due to page fault\n", current_process->name);
+        process_exit(current_process, -1);
+    }
 }
 
 // Function to map a virtual page to a physical frame

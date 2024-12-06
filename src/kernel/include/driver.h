@@ -87,7 +87,9 @@ typedef struct {
     uint32_t dma_channel;
     uint32_t irq;
     uint32_t io_base;
+    uint32_t io_size;  // Add io_size
     uint32_t mem_base;
+    uint32_t mem_size; // Add mem_size
 } driver_config_t;
 
 // Forward declaration of driver structure
@@ -132,8 +134,8 @@ int driver_register(driver_t* driver);
 int driver_unregister(driver_t* driver);
 driver_t* driver_find(const char* name);
 driver_t* driver_find_by_type(driver_type_t type);
-void driver_init_all(void);
-void driver_cleanup_all(void);
+int driver_init_all(void);  // Changed return type to int
+int driver_cleanup_all(void);  // Changed return type to int
 void driver_dump_info(driver_t* driver);
 const char* driver_error_string(int error);
 

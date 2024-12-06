@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "kheap.h"
 #include "string.h"
+#include "memory.h"  // Add this for page_directory_t
 
 // Process states
 #define PROCESS_STATE_READY     0
@@ -37,7 +38,7 @@ typedef struct {
     uint32_t esp;
     uint32_t eip;
     uint32_t eflags;
-    uint32_t cr3;  // Page directory
+    uint32_t cr3;  // Page directory physical address
 } process_context_t;
 
 // Process structure
@@ -51,7 +52,7 @@ typedef struct process {
     uint32_t stack;                        // Kernel stack location
     uint32_t stack_size;                   // Stack size
     uint32_t stack_base;                   // Stack base address
-    uint32_t* page_directory;              // Page directory
+    page_directory_t* page_directory;      // Page directory
     struct process* parent;                // Parent process
     struct process* next;                  // Next process in queue
     uint32_t sleep_until;                  // Wake up time for sleeping processes

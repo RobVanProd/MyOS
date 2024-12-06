@@ -15,6 +15,7 @@
 #include "network/rtl8139.h"
 #include "test_process.h"
 #include "sound_buffer.h"
+#include "command.h"
 
 // Function declarations
 void init_kernel(void);
@@ -72,12 +73,22 @@ void kernel_main(void) {
     // Register mouse interrupt handler
     register_interrupt_handler(44, irq12_handler); // IRQ12 is mapped to interrupt 44
     
+    // Initialize command system
+    command_init();
+
+    // Create shell window
+    shell_t* shell = create_shell(100, 100, 640, 400);
+    if (!shell) {
+        terminal_writestring("Failed to create shell window\n");
+    }
+
     // Clear terminal
     terminal_writestring("Welcome to MyOS!\n");
-    terminal_writestring("Initializing system...\n");
+    terminal_writestring("Type 'help' for available commands.\n");
     
-    // Create test process
-    process_create("test", test_process_entry);
+    // Command buffer
+    char cmd_buffer[MAX_COMMAND_LENGTH];
+    int cmd_pos = 0;
     
     // Main kernel loop
     while (1) {
@@ -85,7 +96,26 @@ void kernel_main(void) {
         if (keyboard_status()) {
             char c = keyboard_getchar();
             if (c) {
-                terminal_putchar(c);
+                if (c == '\n') {
+                    // Execute command
+                    terminal_putchar('\n');
+                    cmd_buffer[cmd_pos] = '\0';
+                    if (cmd_pos > 0) {
+                        command_execute(cmd_buffer);
+                    }
+                    cmd_pos = 0;
+                    terminal_writestring("\n> ");
+                } else if (c == '\b' && cmd_pos > 0) {
+                    // Handle backspace
+                    cmd_pos--;
+                    terminal_putchar('\b');
+                    terminal_putchar(' ');
+                    terminal_putchar('\b');
+                } else if (cmd_pos < MAX_COMMAND_LENGTH - 1 && c >= ' ' && c <= '~') {
+                    // Add character to buffer
+                    cmd_buffer[cmd_pos++] = c;
+                    terminal_putchar(c);
+                }
             }
         }
         
