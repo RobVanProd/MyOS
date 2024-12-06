@@ -18,14 +18,30 @@
 pci_device_t pci_devices[256];
 int num_pci_devices = 0;
 
-// Helper functions
-void int_to_hex_string(uint32_t value, char* buffer) {
-    const char hex_digits[] = "0123456789ABCDEF";
-    for (int i = 7; i >= 0; i--) {
-        buffer[i] = hex_digits[value & 0xF];
-        value >>= 4;
+// Initialize PCI subsystem
+void pci_init(void) {
+    // Reset device count
+    num_pci_devices = 0;
+    
+    // Scan all PCI buses
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint16_t slot = 0; slot < 32; slot++) {
+            uint16_t vendor = pci_read_config(bus, slot, 0, 0) & 0xFFFF;
+            if (vendor != 0xFFFF) {
+                uint16_t device = (pci_read_config(bus, slot, 0, 0) >> 16) & 0xFFFF;
+                uint16_t class = (pci_read_config(bus, slot, 0, 0x0B) >> 24) & 0xFF;
+                uint16_t subclass = (pci_read_config(bus, slot, 0, 0x0A) >> 16) & 0xFF;
+                kprintf("Found PCI device: Vendor=%x, Device=%x, Class=%x, Subclass=%x\n", 
+                       vendor, device, class, subclass);
+            }
+        }
     }
-    buffer[8] = '\0';
+    
+    // Print detected devices
+    kprintf("PCI: Detected %d devices\n", num_pci_devices);
+    for (int i = 0; i < num_pci_devices; i++) {
+        pci_dump_device(&pci_devices[i]);
+    }
 }
 
 // Read from PCI configuration space
@@ -249,4 +265,25 @@ void pci_dump_device(pci_device_t* dev) {
     if (dev->interrupt_pin) {
         kprintf("  IRQ Pin: %d\n", dev->interrupt_pin);
     }
+}
+
+int pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, uint8_t* bus_out, uint8_t* slot_out, uint8_t* func_out) {
+    // Search for device with matching vendor and device ID
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint8_t slot = 0; slot < 32; slot++) {
+            for (uint8_t func = 0; func < 8; func++) {
+                uint32_t reg = pci_read_config(bus, slot, func, 0);
+                uint16_t vid = reg & 0xFFFF;
+                uint16_t did = (reg >> 16) & 0xFFFF;
+                
+                if (vid == vendor_id && did == device_id) {
+                    if (bus_out) *bus_out = bus;
+                    if (slot_out) *slot_out = slot;
+                    if (func_out) *func_out = func;
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
 }

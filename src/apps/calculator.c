@@ -4,6 +4,94 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
+#include <heap.h>
+
+// Simple string to float conversion
+static double atof(const char* str) {
+    double result = 0.0;
+    double fraction = 0.0;
+    int decimal_seen = 0;
+    double decimal_places = 1.0;
+    int negative = 0;
+
+    // Handle negative numbers
+    if (*str == '-') {
+        negative = 1;
+        str++;
+    }
+
+    while (*str) {
+        if (*str == '.') {
+            decimal_seen = 1;
+            str++;
+            continue;
+        }
+
+        if (*str >= '0' && *str <= '9') {
+            if (!decimal_seen) {
+                result = result * 10.0 + (*str - '0');
+            } else {
+                decimal_places *= 10.0;
+                fraction = fraction * 10.0 + (*str - '0');
+            }
+        }
+        str++;
+    }
+
+    result += fraction / decimal_places;
+    return negative ? -result : result;
+}
+
+// Simple snprintf implementation for floats
+static int snprintf(char* str, size_t size, const char* format, double value) {
+    if (!str || size == 0) return 0;
+
+    // Handle negative numbers
+    int len = 0;
+    if (value < 0) {
+        if (len < size - 1) {
+            str[len++] = '-';
+            value = -value;
+        } else {
+            return len;
+        }
+    }
+
+    // Extract integer and decimal parts
+    int32_t integer_part = (int32_t)value;
+    double decimal_part = value - integer_part;
+
+    // Convert integer part
+    char int_str[32];
+    int_to_string(integer_part, int_str);
+    
+    // Copy integer part to output
+    int i = 0;
+    while (int_str[i] && len < size - 1) {
+        str[len++] = int_str[i++];
+    }
+
+    // Handle decimal part if present
+    if (decimal_part > 0.000001 && len < size - 2) {
+        str[len++] = '.';
+        for (i = 0; i < 6 && len < size - 1; i++) {
+            decimal_part *= 10;
+            int digit = (int)decimal_part;
+            str[len++] = '0' + digit;
+            decimal_part -= digit;
+        }
+    }
+
+    // Null terminate
+    if (len < size) {
+        str[len] = '\0';
+    } else {
+        str[size - 1] = '\0';
+        len = size - 1;
+    }
+
+    return len;
+}
 
 // Button definitions
 static const calc_button_t default_buttons[] = {
@@ -32,7 +120,7 @@ static const calc_button_t default_buttons[] = {
 };
 
 calculator_t* create_calculator(int x, int y) {
-    calculator_t* calc = (calculator_t*)malloc(sizeof(calculator_t));
+    calculator_t* calc = heap_alloc(sizeof(calculator_t));
     if (!calc) return NULL;
 
     calc->x = x;
@@ -55,7 +143,7 @@ calculator_t* create_calculator(int x, int y) {
 
 void destroy_calculator(calculator_t* calc) {
     if (calc) {
-        free(calc);
+        heap_free(calc);
     }
 }
 

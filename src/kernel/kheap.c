@@ -165,53 +165,48 @@ static void coalesce_blocks(heap_t* heap) {
 
 // Allocate memory from heap
 void* heap_alloc(heap_t* heap, uint32_t size) {
-    if (!heap || size == 0) {
-        return NULL;
-    }
-
+    if (!heap || size == 0) return NULL;
+    
     // Find a suitable block
     header_t* block = find_best_fit(heap, size);
-    
-    // If no suitable block found, try to expand heap
     if (!block) {
-        if (!expand_heap(heap, size)) {
-            return NULL;
+        // No suitable block found, try to expand heap
+        uint32_t expand_size = size + sizeof(header_t);
+        if (expand_heap(heap, expand_size) == 0) {
+            return NULL;  // Expansion failed
         }
         block = find_best_fit(heap, size);
-        if (!block) {
-            return NULL;
-        }
+        if (!block) return NULL;  // Should not happen
     }
-
+    
     // Split block if necessary
     split_block(block, size);
     
     // Mark block as used
     block->is_free = 0;
     update_checksum(block);
-
+    
+    // Return pointer to usable memory
     return (void*)((uint32_t)block + sizeof(header_t));
 }
 
 // Free memory back to heap
 void heap_free(heap_t* heap, void* ptr) {
-    if (!heap || !ptr) {
-        return;
-    }
-
+    if (!heap || !ptr) return;
+    
     // Get block header
-    header_t* block = (header_t*)((uint32_t)ptr - sizeof(header_t));
-
-    // Validate block
-    if (block->magic != HEAP_MAGIC || block->checksum != calculate_checksum(block)) {
-        terminal_writestring("Invalid block header in heap_free!\n");
+    header_t* header = (header_t*)((uint32_t)ptr - sizeof(header_t));
+    
+    // Validate header
+    if (header->magic != HEAP_MAGIC || header->checksum != calculate_checksum(header)) {
+        kprintf("Invalid block header detected in heap_free!\n");
         return;
     }
-
+    
     // Mark block as free
-    block->is_free = 1;
-    update_checksum(block);
-
+    header->is_free = 1;
+    update_checksum(header);
+    
     // Try to coalesce blocks
     coalesce_blocks(heap);
 }

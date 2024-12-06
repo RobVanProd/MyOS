@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "../kernel/window.h"
+#include "window.h"
 
 #define SHELL_BUFFER_SIZE 4096
 #define SHELL_MAX_HISTORY 50

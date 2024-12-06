@@ -1,4 +1,7 @@
 #include "terminal.h"
+#include "keyboard.h"
+#include "process.h"
+#include "string.h"
 
 static const size_t VGA_WIDTH = 80;
 static const size_t VGA_HEIGHT = 25;
@@ -110,82 +113,108 @@ void terminal_writehex(uint32_t value) {
     terminal_writestring(hex_str);
 }
 
-// Convert integer to string
-void int_to_string(int64_t value, char* str) {
+void terminal_writedec(uint32_t value) {
+    char dec_str[11];  // Maximum 10 digits + null terminator
+    int i = 0;
+    
+    // Handle special case for 0
     if (value == 0) {
-        str[0] = '0';
-        str[1] = '\0';
+        terminal_putchar('0');
         return;
     }
-
-    char temp[32];
-    int i = 0;
-    int is_negative = 0;
-
-    if (value < 0) {
-        is_negative = 1;
-        value = -value;
-    }
-
+    
+    // Convert to decimal string (in reverse)
     while (value > 0) {
-        temp[i++] = '0' + (value % 10);
+        dec_str[i++] = '0' + (value % 10);
         value /= 10;
     }
-
-    int j = 0;
-    if (is_negative) {
-        str[j++] = '-';
-    }
-
+    
+    // Print in correct order
     while (--i >= 0) {
-        str[j++] = temp[i];
+        terminal_putchar(dec_str[i]);
     }
-    str[j] = '\0';
 }
 
-// Convert unsigned integer to string
-void uint_to_string(uint64_t value, char* str) {
-    if (value == 0) {
-        str[0] = '0';
-        str[1] = '\0';
-        return;
+char terminal_getchar(void) {
+    // Wait for a key from the keyboard buffer
+    while (keyboard_buffer_empty()) {
+        // Sleep or yield to other processes
+        process_yield();
     }
-
-    char temp[32];
-    int i = 0;
-
-    while (value > 0) {
-        temp[i++] = '0' + (value % 10);
-        value /= 10;
-    }
-
-    int j = 0;
-    while (--i >= 0) {
-        str[j++] = temp[i];
-    }
-    str[j] = '\0';
+    return keyboard_getchar();
 }
 
-// Convert integer to hexadecimal string
-void int_to_hex_string(uint64_t value, char* str) {
-    if (value == 0) {
-        str[0] = '0';
-        str[1] = '\0';
-        return;
+int kvprintf(const char* format, va_list args) {
+    int written = 0;
+    
+    while (*format != '\0') {
+        if (*format != '%') {
+            terminal_putchar(*format);
+            written++;
+            format++;
+            continue;
+        }
+        
+        format++; // Skip '%'
+        
+        switch (*format) {
+            case 'c': {
+                char c = (char)va_arg(args, int);
+                terminal_putchar(c);
+                written++;
+                break;
+            }
+            case 's': {
+                const char* str = va_arg(args, const char*);
+                if (!str) str = "(null)";
+                terminal_writestring(str);
+                written += strlen(str);
+                break;
+            }
+            case 'd':
+            case 'i': {
+                int num = va_arg(args, int);
+                if (num < 0) {
+                    terminal_putchar('-');
+                    written++;
+                    num = -num;
+                }
+                terminal_writedec((uint32_t)num);
+                // Approximate number of digits
+                int temp = num;
+                do {
+                    written++;
+                    temp /= 10;
+                } while (temp > 0);
+                break;
+            }
+            case 'x': {
+                uint32_t num = va_arg(args, uint32_t);
+                terminal_writehex(num);
+                written += 10; // "0x" + 8 hex digits
+                break;
+            }
+            case '%': {
+                terminal_putchar('%');
+                written++;
+                break;
+            }
+            default:
+                terminal_putchar('%');
+                terminal_putchar(*format);
+                written += 2;
+                break;
+        }
+        format++;
     }
+    
+    return written;
+}
 
-    char temp[32];
-    int i = 0;
-    const char hex_digits[] = "0123456789ABCDEF";
-
-    while (value > 0) {
-        temp[i++] = hex_digits[value & 0xF];
-        value >>= 4;
-    }
-
-    int j = 0;
-    while (--i >= 0) {
-        str[j++] = temp[i];
-    }
-    str[j] = '\0';
+int kprintf(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    int ret = kvprintf(format, args);
+    va_end(args);
+    return ret;
 }

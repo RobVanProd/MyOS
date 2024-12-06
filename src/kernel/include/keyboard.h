@@ -1,6 +1,7 @@
 #ifndef KEYBOARD_H
 #define KEYBOARD_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "isr.h"
 #include "pic.h"
@@ -57,11 +58,12 @@
 
 // Function declarations
 void keyboard_init(void);
+bool keyboard_buffer_empty(void);
+char keyboard_getchar(void);
 void keyboard_handler(registers_t* regs);
 void keyboard_send_command(uint8_t command);
 uint8_t keyboard_read_status(void);
 uint8_t keyboard_status(void);
-char keyboard_getchar(void);
 void keyboard_wait(void);
 uint8_t keyboard_read_data(void);
 void keyboard_write_command(uint8_t cmd);

@@ -16,6 +16,7 @@
 #include "test_process.h"
 #include "sound_buffer.h"
 #include "command.h"
+#include "../apps/shell.h"
 
 // Function declarations
 void init_kernel(void);

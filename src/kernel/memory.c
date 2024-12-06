@@ -1,6 +1,7 @@
 #include <memory.h>
 #include <string.h>
 #include "kheap.h"
+#include "terminal.h"
 
 // Memory map entry structure
 typedef struct {
@@ -26,23 +27,24 @@ void memory_init(void) {
 }
 
 // Page allocation
-void* alloc_page(void) {
+page_t* alloc_page(void) {
     for (uint32_t i = 0; i < total_pages; i++) {
         if (!(page_bitmap[i / 32] & (1 << (i % 32)))) {
             page_bitmap[i / 32] |= (1 << (i % 32));
             free_pages--;
-            return (void*)(i * 4096);
+            page_t* page = kmalloc(sizeof(page_t));
+            if (page) {
+                page->present = 1;
+                page->frame = i;
+                return page;
+            }
+            // If kmalloc fails, free the frame
+            page_bitmap[i / 32] &= ~(1 << (i % 32));
+            free_pages++;
+            return NULL;
         }
     }
     return NULL;
-}
-
-void free_page(void* page) {
-    uint32_t page_index = (uint32_t)page / 4096;
-    if (page_index < total_pages) {
-        page_bitmap[page_index / 32] &= ~(1 << (page_index % 32));
-        free_pages++;
-    }
 }
 
 // Memory information
@@ -115,4 +117,136 @@ int munmap(void* addr, size_t length) {
     }
     
     return 0;
+}
+
+// Page directory management
+static page_directory_t* kernel_directory = NULL;
+
+page_directory_t* create_page_directory(void) {
+    page_directory_t* dir = (page_directory_t*)kmalloc(sizeof(page_directory_t));
+    if (!dir) return NULL;
+    
+    memset(dir, 0, sizeof(page_directory_t));
+    
+    // Copy kernel page tables
+    for (int i = 768; i < 1024; i++) {
+        dir->tables[i] = kernel_directory->tables[i];
+        dir->tables_physical[i] = kernel_directory->tables_physical[i];
+    }
+    
+    return dir;
+}
+
+page_directory_t* copy_page_directory(page_directory_t* src) {
+    page_directory_t* dir = (page_directory_t*)kmalloc(sizeof(page_directory_t));
+    if (!dir) return NULL;
+    
+    // Copy the page directory structure
+    memcpy(dir, src, sizeof(page_directory_t));
+    
+    // Allocate and copy page tables
+    for (int i = 0; i < 768; i++) {  // Only copy user space
+        if (src->tables[i]) {
+            page_table_t* table = (page_table_t*)kmalloc(sizeof(page_table_t));
+            if (!table) {
+                free_page_directory(dir);
+                return NULL;
+            }
+            memcpy(table, src->tables[i], sizeof(page_table_t));
+            dir->tables[i] = table;
+            dir->tables_physical[i] = (uint32_t)table | 0x7;  // Present, RW, User
+        }
+    }
+    
+    return dir;
+}
+
+void free_page_directory(page_directory_t* dir) {
+    if (!dir) return;
+    
+    // Free page tables (only user space)
+    for (int i = 0; i < 768; i++) {
+        if (dir->tables[i]) {
+            kfree(dir->tables[i]);
+        }
+    }
+    
+    kfree(dir);
+}
+
+page_directory_t* get_kernel_page_directory(void) {
+    return kernel_directory;
+}
+
+void switch_page_directory(page_directory_t* dir) {
+    if (!dir) return;
+    
+    uint32_t cr3 = dir->physical_addr;
+    asm volatile("mov %0, %%cr3" :: "r"(cr3));
+}
+
+// Page and region management
+void allocate_page(page_t* page, int is_kernel, int is_writeable) {
+    if (page->frame != 0) return;  // Page already allocated
+    
+    void* frame = alloc_page();
+    if (!frame) {
+        kprintf("Failed to allocate physical frame!\n");
+        return;
+    }
+    
+    page->present = 1;
+    page->rw = (is_writeable) ? 1 : 0;
+    page->user = (is_kernel) ? 0 : 1;
+    page->frame = (uint32_t)frame / 4096;
+}
+
+void free_page(page_t* page) {
+    if (!page) return;
+    uint32_t frame = page->frame;
+    if (frame) {
+        page_bitmap[frame / 32] &= ~(1 << (frame % 32));
+        page->frame = 0;
+        page->present = 0;
+        free_pages++;
+    }
+}
+
+bool allocate_region(page_directory_t* dir, uint32_t start, uint32_t size, uint32_t flags) {
+    uint32_t start_page = start / 4096;
+    uint32_t end_page = (start + size - 1) / 4096;
+    
+    for (uint32_t page = start_page; page <= end_page; page++) {
+        uint32_t table_idx = page / 1024;
+        uint32_t page_idx = page % 1024;
+        
+        if (!dir->tables[table_idx]) {
+            // Create new page table
+            page_table_t* table = (page_table_t*)kmalloc(sizeof(page_table_t));
+            if (!table) return false;
+            
+            memset(table, 0, sizeof(page_table_t));
+            dir->tables[table_idx] = table;
+            dir->tables_physical[table_idx] = (uint32_t)table | (flags & 0x7);
+        }
+        
+        page_t* p = &dir->tables[table_idx]->pages[page_idx];
+        allocate_page(p, !(flags & PAGE_USER), flags & PAGE_WRITE);
+    }
+    
+    return true;
+}
+
+void free_region(page_directory_t* dir, uint32_t start, uint32_t size) {
+    uint32_t start_page = start / 4096;
+    uint32_t end_page = (start + size - 1) / 4096;
+    
+    for (uint32_t page = start_page; page <= end_page; page++) {
+        uint32_t table_idx = page / 1024;
+        uint32_t page_idx = page % 1024;
+        
+        if (dir->tables[table_idx]) {
+            free_page(&dir->tables[table_idx]->pages[page_idx]);
+        }
+    }
 }

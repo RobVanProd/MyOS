@@ -1,7 +1,11 @@
 #include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
 #include "interrupt.h"
 #include "io.h"
 #include "terminal.h"
+#include "pic.h"
+#include "signal.h"
 
 // IDT entry structure
 struct idt_entry {

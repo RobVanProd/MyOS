@@ -51,15 +51,18 @@ size_t get_total_memory(void);
 size_t get_free_memory(void);
 size_t get_used_memory(void);
 
-// Page directory functions
+// Page directory management
 page_directory_t* create_page_directory(void);
+page_directory_t* copy_page_directory(page_directory_t* src);
 void free_page_directory(page_directory_t* dir);
 page_directory_t* get_kernel_page_directory(void);
-page_directory_t* copy_page_directory(page_directory_t* src);
+void switch_page_directory(page_directory_t* dir);
 
-// Memory mapping functions
-int allocate_region(page_directory_t* dir, uint32_t base, uint32_t size, uint32_t flags);
-int free_region(page_directory_t* dir, uint32_t base, uint32_t size);
+// Page and region management
+page_t* alloc_page(void);
+void free_page(page_t* page);
+bool allocate_region(page_directory_t* dir, uint32_t start, uint32_t size, uint32_t flags);
+void free_region(page_directory_t* dir, uint32_t start, uint32_t size);
 
 // Memory mapping functions
 void* mmap(void* addr, uint32_t length, int prot, int flags, int fd, uint32_t offset);

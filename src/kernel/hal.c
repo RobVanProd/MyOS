@@ -77,6 +77,20 @@ uint32_t hal_mem_get_free(void) {
 }
 
 // Interrupt management
+void hal_interrupt_init(void) {
+    // Initialize PIC
+    pic_init();
+    
+    // Initialize IDT
+    idt_init();
+    
+    // Initialize timer
+    hal_timer_init(100);  // 100 Hz timer
+    
+    // Enable interrupts
+    asm volatile("sti");
+}
+
 void hal_interrupt_register(uint8_t vector, interrupt_handler_t handler) {
     if (!handler) return;
     idt_set_gate(vector, (uint32_t)handler, 0x08, 0x8E);
@@ -84,6 +98,13 @@ void hal_interrupt_register(uint8_t vector, interrupt_handler_t handler) {
 
 void hal_interrupt_unregister(uint8_t vector) {
     idt_set_gate(vector, 0, 0, 0);
+}
+
+void hal_pic_eoi(uint8_t irq) {
+    if (irq >= 8) {
+        outb(0xA0, 0x20);  // Send EOI to slave PIC
+    }
+    outb(0x20, 0x20);  // Send EOI to master PIC
 }
 
 // Timer management
@@ -175,6 +196,28 @@ int hal_power_set_state(power_state_t state) {
 
 power_state_t hal_power_get_state(void) {
     return current_power_state;
+}
+
+// System shutdown
+void hal_shutdown(void) {
+    // Disable interrupts
+    asm volatile("cli");
+    
+    // Try ACPI shutdown first
+    if (acpi_shutdown() == HAL_SUCCESS) {
+        return;
+    }
+    
+    // If ACPI shutdown fails, try APM
+    outw(0xB004, 0x0 | (2 << 10));
+    
+    // If APM fails, try keyboard controller
+    outb(0x64, 0xFE);
+    
+    // If all else fails, halt the CPU
+    for (;;) {
+        asm volatile("hlt");
+    }
 }
 
 // Device management

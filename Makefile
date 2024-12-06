@@ -11,7 +11,7 @@ LDFLAGS = -ffreestanding -O2 -nostdlib -m32 -Wl,--build-id=none
 
 # Source files
 BOOT_SRC = src/boot/multiboot.asm
-ASM_SRCS = src/kernel/interrupt.asm src/kernel/gdt.asm
+ASM_SRCS = src/kernel/interrupt_asm.asm src/kernel/gdt_asm.asm
 KERNEL_SRCS = src/kernel/kernel.c \
               src/kernel/string.c \
               src/kernel/terminal.c \
@@ -29,8 +29,18 @@ KERNEL_SRCS = src/kernel/kernel.c \
               src/kernel/pci.c \
               src/kernel/interrupt.c \
               src/kernel/net/netstack.c \
+              src/kernel/graphics.c \
+              src/kernel/signal.c \
+              src/kernel/acpi.c \
+              src/kernel/timer.c \
+              src/kernel/idt.c \
+              src/kernel/cursor.c \
+              src/kernel/tss.c \
+              src/kernel/command.c \
+              src/kernel/shell.c \
               src/drivers/storage/ata.c \
               src/drivers/network/rtl8139.c \
+              src/kernel/window.c \
               src/apps/notepad.c \
               src/apps/calculator.c \
               src/kernel/gdt.c

@@ -33,7 +33,7 @@ static const shell_command_t commands[] = {
 
 // Create a new shell window
 shell_t* create_shell(int x, int y, int width, int height) {
-    shell_t* shell = kmalloc(sizeof(shell_t));
+    shell_t* shell = heap_alloc(sizeof(shell_t));
     if (!shell) return NULL;
 
     // Initialize shell structure
@@ -41,7 +41,7 @@ shell_t* create_shell(int x, int y, int width, int height) {
     shell->window = create_window(x, y, width, height, "MyOS Shell", 
                                 WINDOW_MOVABLE | WINDOW_RESIZABLE | WINDOW_HAS_TITLE);
     if (!shell->window) {
-        kfree(shell);
+        heap_free(shell);
         return NULL;
     }
 
@@ -58,6 +58,12 @@ shell_t* create_shell(int x, int y, int width, int height) {
     shell_print(shell, SHELL_PROMPT);
 
     return shell;
+}
+
+void destroy_shell(shell_t* shell) {
+    if (!shell) return;
+    destroy_window(shell->window);
+    heap_free(shell);
 }
 
 // Parse command line into arguments

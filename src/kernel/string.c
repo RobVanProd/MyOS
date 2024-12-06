@@ -1,15 +1,52 @@
 #include "include/string.h"
-#include "include/kheap.h"
+#include "include/heap.h"
 
 // Forward declarations
 static size_t strspn(const char* str, const char* accept);
 static size_t strcspn(const char* str, const char* reject);
 
 // Memory operations declarations
-void* memset(void* dest, int val, size_t len);
-void* memcpy(void* dest, const void* src, size_t len);
-void* memmove(void* dest, const void* src, size_t len);
-int memcmp(const void* s1, const void* s2, size_t len);
+void* memset(void* dest, int val, size_t len) {
+    unsigned char* ptr = (unsigned char*)dest;
+    while (len-- > 0)
+        *ptr++ = val;
+    return dest;
+}
+
+void* memcpy(void* dest, const void* src, size_t len) {
+    unsigned char* d = (unsigned char*)dest;
+    const unsigned char* s = (const unsigned char*)src;
+    while (len-- > 0)
+        *d++ = *s++;
+    return dest;
+}
+
+void* memmove(void* dest, const void* src, size_t len) {
+    unsigned char* d = (unsigned char*)dest;
+    const unsigned char* s = (const unsigned char*)src;
+    if (d < s) {
+        while (len-- > 0)
+            *d++ = *s++;
+    } else {
+        d += len;
+        s += len;
+        while (len-- > 0)
+            *--d = *--s;
+    }
+    return dest;
+}
+
+int memcmp(const void* s1, const void* s2, size_t len) {
+    const unsigned char* p1 = (const unsigned char*)s1;
+    const unsigned char* p2 = (const unsigned char*)s2;
+    while (len-- > 0) {
+        if (*p1 != *p2)
+            return *p1 - *p2;
+        p1++;
+        p2++;
+    }
+    return 0;
+}
 
 size_t strlen(const char* str) {
     size_t len = 0;
@@ -328,21 +365,21 @@ long atol(const char* str) {
 
 char* strdup(const char* s) {
     size_t len = strlen(s) + 1;
-    char* new = kmalloc(len);
-    if (new) {
-        memcpy(new, s, len);
+    char* new_str = heap_alloc(len);
+    if (new_str) {
+        memcpy(new_str, s, len);
     }
-    return new;
+    return new_str;
 }
 
 char* strndup(const char* s, size_t n) {
     size_t len = strnlen(s, n);
-    char* new = kmalloc(len + 1);
-    if (new) {
-        memcpy(new, s, len);
-        new[len] = '\0';
+    char* new_str = heap_alloc(len + 1);
+    if (new_str) {
+        memcpy(new_str, s, len);
+        new_str[len] = '\0';
     }
-    return new;
+    return new_str;
 }
 
 char* strlwr(char* str) {
@@ -384,4 +421,8 @@ char* strstrip(char* str) {
     *(end + 1) = '\0';
     
     return str;
+}
+
+int abs(int x) {
+    return x < 0 ? -x : x;
 }

@@ -18,7 +18,7 @@ static uint8_t* tx_buffers[RTL8139_TX_BUF_COUNT];
 static uint32_t tx_current = 0;
 
 // Initialize RTL8139 device
-static int rtl8139_init_device(rtl8139_device_t* rtl) {
+int rtl8139_init_device(rtl8139_device_t* rtl) {
     // Reset the device
     outb(rtl->io_base + RTL8139_CMD, RTL8139_CMD_RESET);
     while (inb(rtl->io_base + RTL8139_CMD) & RTL8139_CMD_RESET);
@@ -44,7 +44,7 @@ static int rtl8139_init_device(rtl8139_device_t* rtl) {
     outl(rtl->io_base + RTL8139_RBSTART, (uint32_t)rx_buffer);
 
     // Enable transmitter and receiver
-    outb(rtl->io_base + RTL8139_CMD, RTL8139_CMD_RX_EN | RTL8139_CMD_TX_EN);
+    outb(rtl->io_base + RTL8139_CMD, RTL8139_CMD_RX_ENABLE | RTL8139_CMD_TX_ENABLE);
 
     // Set IMR
     outw(rtl->io_base + RTL8139_IMR, RTL8139_INT_ROK | RTL8139_INT_TOK);
@@ -117,7 +117,7 @@ void rtl8139_handle_receive(rtl8139_device_t* rtl) {
     uint16_t rx_size;
     rtl8139_header_t* header;
 
-    while (!(inb(rtl->io_base + RTL8139_CMD) & RTL8139_CMD_RX_EN)) {
+    while (!(inb(rtl->io_base + RTL8139_CMD) & RTL8139_CMD_RX_ENABLE)) {
         header = (rtl8139_header_t*)(rx_buffer + rx_buffer_offset);
         rx_status = header->status;
         rx_size = header->size;
@@ -227,10 +227,10 @@ int rtl8139_receive_packet(rtl8139_device_t* rtl, void* buffer, size_t max_lengt
 }
 
 // IOCTL operations
-int rtl8139_ioctl(driver_t* driver, uint32_t cmd, void* arg) {
+int rtl8139_ioctl(driver_t* driver, int request, void* arg) {
     rtl8139_device_t* rtl = (rtl8139_device_t*)driver;
 
-    switch (cmd) {
+    switch (request) {
         case NETWORK_IOCTL_GET_MAC: {
             uint8_t* mac = (uint8_t*)arg;
             for (int i = 0; i < 6; i++) {
@@ -246,7 +246,7 @@ int rtl8139_ioctl(driver_t* driver, uint32_t cmd, void* arg) {
                 outb(rtl->io_base + RTL8139_IDR0 + i, mac[i]);
             }
             // Re-enable Rx and Tx
-            outb(rtl->io_base + RTL8139_CMD, RTL8139_CMD_RX_EN | RTL8139_CMD_TX_EN);
+            outb(rtl->io_base + RTL8139_CMD, RTL8139_CMD_RX_ENABLE | RTL8139_CMD_TX_ENABLE);
             return 0;
         }
         default:

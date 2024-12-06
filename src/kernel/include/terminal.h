@@ -31,9 +31,14 @@ void terminal_setcolor(uint8_t color);
 void terminal_putchar(char c);
 void terminal_write(const char* data, size_t size);
 void terminal_writestring(const char* data);
+void terminal_writehex(uint32_t value);
+void terminal_writedec(uint32_t value);
 void terminal_clear(void);
 void terminal_scroll(void);
 void terminal_newline(void);
+
+// Terminal input functions
+char terminal_getchar(void);
 
 // Printf-like functions
 int kprintf(const char* format, ...);

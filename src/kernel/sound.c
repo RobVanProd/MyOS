@@ -19,6 +19,34 @@ void sound_init(void) {
     }
 }
 
+// Update sound system
+void sound_update(void) {
+    if (!current_device) return;
+
+    // Process active buffers
+    for (int i = 0; i < MAX_SOUND_BUFFERS; i++) {
+        if (buffers[i].state == BUFFER_STATE_PLAYING) {
+            // Update buffer position
+            uint32_t frame_size = sound_get_frame_size(buffers[i].format, buffers[i].channels);
+            buffers[i].position += frame_size;
+
+            // Check for buffer end
+            if (buffers[i].position >= buffers[i].size) {
+                if (buffers[i].callback) {
+                    // Call buffer callback
+                    buffers[i].callback(buffers[i].data, buffers[i].size);
+                }
+                // Reset or stop buffer
+                buffers[i].position = 0;
+            }
+        }
+    }
+
+    // Mix and output audio
+    uint8_t mix_buffer[DEFAULT_BUFFER_SIZE];
+    sound_mix_buffers(mix_buffer, DEFAULT_BUFFER_SIZE / 4); // Assuming stereo 16-bit
+}
+
 // Register a sound device
 int sound_device_register(sound_device_t* device) {
     if (!device) return -1;

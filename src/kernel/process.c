@@ -1,6 +1,8 @@
 #include "process.h"
+#include "kheap.h"
 #include "memory.h"
 #include "terminal.h"
+#include "paging.h"
 
 // Global variables
 process_t* current_process = NULL;
@@ -25,85 +27,78 @@ static uint32_t process_wait_times[MAX_PROCESSES] = {0};
 void process_init(void) {
     // Create kernel process
     process_t* kernel_process = kmalloc(sizeof(process_t));
-    memset(kernel_process, 0, sizeof(process_t));
+    if (!kernel_process) {
+        kprintf("Failed to allocate kernel process\n");
+        return;
+    }
 
-    kernel_process->pid = 0;  // Kernel is PID 0
-    kernel_process->parent = NULL;
+    // Initialize kernel process
+    memset(kernel_process, 0, sizeof(process_t));
+    strncpy(kernel_process->name, "kernel", MAX_PROCESS_NAME - 1);
+    kernel_process->pid = 0;
     kernel_process->state = PROCESS_STATE_RUNNING;
     kernel_process->priority = PROCESS_PRIORITY_HIGH;
     kernel_process->flags = PROCESS_FLAG_KERNEL;
-    kernel_process->stack_size = 8192;  // 8KB stack for kernel
-    kernel_process->stack = (uint32_t)kmalloc(kernel_process->stack_size);
-
-    // Set up kernel page directory
     kernel_process->page_directory = get_kernel_page_directory();
-
-    // Set up kernel stack
-    kernel_process->stack_base = 0xC0000000 - kernel_process->stack_size;
-
-    // Initialize kernel context
-    memset(&kernel_process->context, 0, sizeof(process_context_t));
-    kernel_process->context.esp = kernel_process->stack_base + kernel_process->stack_size;
-    kernel_process->context.eflags = 0x202;  // Interrupts enabled
-
+    
     // Set as current process
     current_process = kernel_process;
-    processes[0] = kernel_process;
-
-    // Initialize scheduler
-    scheduler_init();
 }
 
 // Create a new process
 process_t* process_create(const char* name, void (*entry)(void)) {
     // Allocate process structure
     process_t* process = kmalloc(sizeof(process_t));
-    if (!process) return NULL;
+    if (!process) {
+        kprintf("Failed to allocate process structure\n");
+        return NULL;
+    }
 
     // Initialize process structure
     memset(process, 0, sizeof(process_t));
-    process->pid = next_pid++;
-    process->parent = current_process;
     strncpy(process->name, name, MAX_PROCESS_NAME - 1);
-    process->state = PROCESS_STATE_READY;
-    process->priority = PROCESS_PRIORITY_NORMAL;
-    process->flags = PROCESS_FLAG_USER;
-    process->stack_size = 4096;  // 4KB stack for user processes
-
-    // Allocate stack
-    process->stack = (uint32_t)kmalloc(process->stack_size);
-    if (!process->stack) {
-        kfree(process);
-        return NULL;
-    }
-
+    
     // Create page directory
     process->page_directory = create_page_directory();
     if (!process->page_directory) {
-        kfree((void*)process->stack);
+        kprintf("Failed to create page directory\n");
         kfree(process);
         return NULL;
     }
 
-    // Set up stack
-    process->stack_base = 0xC0000000 - process->stack_size;
-    if (!allocate_region(process->page_directory, process->stack_base, process->stack_size, 
-                        PAGE_PRESENT | PAGE_WRITE | (process->flags & PROCESS_FLAG_USER ? PAGE_USER : 0))) {
-        free_page_directory(process->page_directory);
-        kfree((void*)process->stack);
-        kfree(process);
-        return NULL;
-    }
-
-    // Initialize context
-    memset(&process->context, 0, sizeof(process_context_t));
-    process->context.esp = process->stack_base + process->stack_size;
+    // Set up process context
     process->context.eip = (uint32_t)entry;
-    process->context.eflags = 0x202;  // Interrupts enabled
-
-    // Add to process list and scheduler
+    process->context.eflags = 0x202;  // IF flag set
+    process->context.cs = 0x08;       // Kernel code segment
+    process->context.ds = 0x10;       // Kernel data segment
+    process->context.es = 0x10;
+    process->context.fs = 0x10;
+    process->context.gs = 0x10;
+    process->context.ss = 0x10;
+    
+    // Allocate kernel stack
+    process->stack_size = 8192;  // 8KB stack
+    process->stack = (uint32_t)kmalloc(process->stack_size);
+    if (!process->stack) {
+        kprintf("Failed to allocate kernel stack\n");
+        kfree(process->page_directory);
+        kfree(process);
+        return NULL;
+    }
+    
+    process->context.esp = process->stack + process->stack_size;
+    process->context.ebp = process->context.esp;
+    
+    // Initialize other fields
+    process->pid = next_pid++;
+    process->state = PROCESS_STATE_READY;
+    process->priority = PROCESS_PRIORITY_NORMAL;
+    process->flags = PROCESS_FLAG_USER;
+    process->parent = current_process;
+    
+    // Add to process list
     scheduler_add_process(process);
-
+    
     return process;
 }
 
@@ -113,14 +108,6 @@ void process_destroy(process_t* process) {
 
     // Remove from scheduler
     scheduler_remove_process(process);
-
-    // Remove from process list
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (processes[i] == process) {
-            processes[i] = NULL;
-            break;
-        }
-    }
 
     // Free resources
     if (process->stack) {
@@ -136,42 +123,45 @@ void process_destroy(process_t* process) {
 
 // Switch to a process
 void process_switch(process_t* next) {
-    if (!next || next == current_process) return;
-    
-    // Disable interrupts during context switch
-    asm volatile("cli");
-    
     process_t* prev = current_process;
     
-    // Save current context if there is a previous process
-    if (prev && prev->state != PROCESS_STATE_ZOMBIE) {
-        // Save CPU registers
+    // Save current context if there is one
+    if (prev) {
+        // Save general purpose registers
         asm volatile(
             "mov %%esp, %0\n"
             "mov %%ebp, %1\n"
             "pushf\n"
             "pop %2\n"
-            : "=m"(prev->context.esp),
-              "=m"(prev->context.ebp),
-              "=m"(prev->context.eflags)
+            : "=r"(prev->context.esp),
+              "=r"(prev->context.ebp),
+              "=r"(prev->context.eflags)
             :
             : "memory"
         );
         
         // Save segment registers
         asm volatile(
-            "mov %%cs, %0\n"
-            "mov %%ds, %1\n"
-            "mov %%es, %2\n"
-            "mov %%fs, %3\n"
-            "mov %%gs, %4\n"
+            "mov %%cs, %%ax\n"
+            "mov %%ax, %0\n"
+            "mov %%ds, %%ax\n"
+            "mov %%ax, %1\n"
+            "mov %%es, %%ax\n"
+            "mov %%ax, %2\n"
+            "mov %%fs, %%ax\n"
+            "mov %%ax, %3\n"
+            "mov %%gs, %%ax\n"
+            "mov %%ax, %4\n"
+            "mov %%ss, %%ax\n"
+            "mov %%ax, %5\n"
             : "=m"(prev->context.cs),
               "=m"(prev->context.ds),
               "=m"(prev->context.es),
               "=m"(prev->context.fs),
-              "=m"(prev->context.gs)
+              "=m"(prev->context.gs),
+              "=m"(prev->context.ss)
             :
-            : "memory"
+            : "ax", "memory"
         );
         
         // Save FPU state if used
@@ -212,24 +202,28 @@ void process_switch(process_t* next) {
         "push %2\n"
         "popf\n"
         : 
-        : "m"(next->context.esp),
-          "m"(next->context.ebp),
-          "m"(next->context.eflags)
+        : "r"(next->context.esp),
+          "r"(next->context.ebp),
+          "r"(next->context.eflags)
         : "memory"
     );
     
     // Restore segment registers
     asm volatile(
-        "mov %0, %%ds\n"
-        "mov %1, %%es\n"
-        "mov %2, %%fs\n"
-        "mov %3, %%gs\n"
+        "mov %0, %%ax\n"
+        "mov %%ax, %%ds\n"
+        "mov %1, %%ax\n"
+        "mov %%ax, %%es\n"
+        "mov %2, %%ax\n"
+        "mov %%ax, %%fs\n"
+        "mov %3, %%ax\n"
+        "mov %%ax, %%gs\n"
         : 
         : "m"(next->context.ds),
           "m"(next->context.es),
           "m"(next->context.fs),
           "m"(next->context.gs)
-        : "memory"
+        : "ax", "memory"
     );
     
     // Re-enable interrupts
@@ -238,25 +232,32 @@ void process_switch(process_t* next) {
     // If returning to user mode, use iret
     if (next->flags & PROCESS_FLAG_USER) {
         asm volatile(
-            "pushw %0\n"        // ss
-            "pushl %1\n"        // esp
-            "pushfl\n"          // eflags
-            "pushw %2\n"        // cs
-            "pushl %3\n"        // eip
+            "mov %0, %%ax\n"
+            "mov %%ax, %%ds\n"
+            "mov %%ax, %%es\n"
+            "mov %%ax, %%fs\n"
+            "mov %%ax, %%gs\n"
+            "push %1\n"        // ss
+            "push %2\n"        // esp
+            "push %3\n"        // eflags
+            "push %4\n"        // cs
+            "push %5\n"        // eip
             "iret\n"
             : 
-            : "m"(next->context.ss),
-              "m"(next->context.esp),
+            : "m"(next->context.ds),
+              "m"(next->context.ss),
+              "r"(next->context.esp),
+              "r"(next->context.eflags),
               "m"(next->context.cs),
-              "m"(next->context.eip)
-            : "memory"
+              "r"(next->context.eip)
+            : "ax", "memory"
         );
     } else {
         // Kernel mode - just jump
         asm volatile(
             "jmp *%0\n"
             : 
-            : "m"(next->context.eip)
+            : "r"(next->context.eip)
             : "memory"
         );
     }
@@ -443,58 +444,72 @@ void process_schedule(void) {
     }
 }
 
+// Put a process to sleep
+void process_sleep(uint32_t ticks) {
+    if (!current_process) return;
+    
+    current_process->sleep_until = get_timer_ticks() + ticks;
+    current_process->state = PROCESS_STATE_SLEEPING;
+    
+    // Remove from scheduler
+    scheduler_remove_process(current_process);
+    
+    // Force a context switch
+    process_yield();
+}
+
+// Wake up a sleeping process
+void process_wake(process_t* process) {
+    if (!process) return;
+    
+    if (get_timer_ticks() >= process->sleep_until) {
+        process->state = PROCESS_STATE_READY;
+        process->sleep_until = 0;
+        scheduler_add_process(process);
+    }
+}
+
 // System call implementations
 int sys_fork(void) {
-    process_t* parent = current_process;
-    if (!parent) return -1;
-
-    // Check if we've reached the process limit
-    int free_slot = -1;
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (!processes[i]) {
-            free_slot = i;
-            break;
-        }
-    }
-    if (free_slot == -1) return -1;
-
-    // Allocate new process structure
+    // Create new process structure
     process_t* child = kmalloc(sizeof(process_t));
-    if (!child) return -1;
+    if (!child) {
+        kprintf("Failed to allocate child process\n");
+        return -1;
+    }
 
     // Copy process structure
-    memcpy(child, parent, sizeof(process_t));
+    memcpy(child, current_process, sizeof(process_t));
     child->pid = next_pid++;
-    child->parent = parent;
+    child->parent = current_process;
     child->state = PROCESS_STATE_READY;
     child->next = NULL;
 
     // Copy page directory
-    child->page_directory = copy_page_directory(parent->page_directory);
+    child->page_directory = copy_page_directory(current_process->page_directory);
     if (!child->page_directory) {
         kfree(child);
         return -1;
     }
 
     // Allocate and copy stack
-    child->stack = (uint32_t)kmalloc(parent->stack_size);
+    child->stack = (uint32_t)kmalloc(current_process->stack_size);
     if (!child->stack) {
-        free_page_directory(child->page_directory);
+        kfree(child->page_directory);
         kfree(child);
         return -1;
     }
-    memcpy((void*)child->stack, (void*)parent->stack, parent->stack_size);
+    memcpy((void*)child->stack, (void*)current_process->stack, current_process->stack_size);
 
     // Update stack pointers to point to new stack
-    uint32_t stack_offset = child->stack - parent->stack;
+    uint32_t stack_offset = child->stack - current_process->stack;
     child->context.esp += stack_offset;
-    child->stack_base = parent->stack_base + stack_offset;
+    child->stack_base = current_process->stack_base + stack_offset;
 
     // Set return value for child
     child->context.eax = 0;  // Child gets 0
 
     // Add to process list and scheduler
-    processes[free_slot] = child;
     scheduler_add_process(child);
 
     return child->pid;  // Parent gets child's pid

@@ -17,8 +17,8 @@ typedef struct {
 // Notepad functions
 notepad_t* create_notepad(int x, int y);
 void destroy_notepad(notepad_t* notepad);
-void notepad_handle_key(window_t* window, char key);
-void notepad_handle_click(window_t* window, int x, int y);
-void notepad_draw(window_t* window);
+void notepad_handle_key(struct window* window, int key);
+void notepad_handle_click(struct window* window, int x, int y, int button);
+void notepad_draw(struct window* window);
 
 #endif

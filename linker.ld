@@ -38,4 +38,7 @@ SECTIONS
 		*(.bss)
 		*(.bootstrap_stack)
 	}
+
+	/* Add the end symbol for heap allocation */
+	end = .;
 }
