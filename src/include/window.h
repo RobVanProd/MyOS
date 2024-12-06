@@ -23,7 +23,9 @@ typedef struct window {
     int width, height;         // Window dimensions
     uint32_t flags;           // Window flags
     char title[32];           // Window title
+    uint8_t* buffer;          // Window buffer
     void* data;               // Window-specific data
+    struct window* next;      // Next window in list
     
     // Event handlers
     window_key_handler on_key;

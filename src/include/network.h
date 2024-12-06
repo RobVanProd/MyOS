@@ -38,13 +38,14 @@
 #define NETWORK_IOCTL_GET_STATS     0x100B
 
 // Network structures
-typedef struct {
-    uint8_t mac[MAC_ADDR_LEN];
-    uint32_t ip;
+typedef struct network_interface {
+    char name[32];
+    uint8_t mac_addr[6];
+    uint32_t ip_addr;
     uint32_t netmask;
     uint32_t gateway;
-    uint8_t flags;
-    void* driver_data;
+    int (*send)(struct network_interface* interface, const void* data, uint32_t length);
+    void (*receive)(struct network_interface* interface, const void* data, uint32_t length);
 } network_interface_t;
 
 typedef struct {
@@ -56,14 +57,14 @@ typedef struct {
 
 typedef struct {
     uint8_t version_ihl;
-    uint8_t tos;
+    uint8_t type_of_service;
     uint16_t total_length;
-    uint16_t id;
-    uint16_t flags_fragment;
-    uint8_t ttl;
+    uint16_t identification;
+    uint16_t flags_fragment_offset;
+    uint8_t time_to_live;
     uint8_t protocol;
-    uint16_t checksum;
-    uint32_t src_ip;
+    uint16_t header_checksum;
+    uint32_t source_ip;
     uint32_t dest_ip;
     uint8_t data[];
 } __attribute__((packed)) ip_header_t;
@@ -88,16 +89,32 @@ typedef struct {
     uint8_t data[];
 } __attribute__((packed)) udp_header_t;
 
+typedef struct {
+    uint8_t type;
+    uint8_t code;
+    uint16_t checksum;
+    uint16_t identifier;
+    uint16_t sequence;
+    uint8_t data[];
+} __attribute__((packed)) icmp_header_t;
+
+// ICMP types
+#define ICMP_ECHO_REPLY 0
+#define ICMP_ECHO_REQUEST 8
+
+// IP protocol numbers
+#define IP_PROTOCOL_ICMP 1
+
 // Network functions
 void network_init(void);
 int network_interface_up(network_interface_t* interface);
 int network_interface_down(network_interface_t* interface);
-int network_send_packet(network_interface_t* interface, void* data, uint16_t length);
-int network_receive_packet(network_interface_t* interface, void* buffer, uint16_t max_length);
+int network_send_packet(network_interface_t* interface, const void* data, uint32_t length);
+void network_receive_packet(network_interface_t* interface, const void* data, uint32_t length);
 
 // IP functions
-uint16_t ip_checksum(void* data, uint16_t length);
-int ip_send(network_interface_t* interface, uint32_t dest_ip, uint8_t protocol, void* data, uint16_t length);
+uint16_t ip_checksum(void* data, uint32_t length);
+int ip_send(network_interface_t* interface, uint32_t dest_ip, uint8_t protocol, const void* data, uint32_t length);
 void ip_receive(network_interface_t* interface, ip_header_t* packet);
 
 // TCP functions
@@ -121,7 +138,7 @@ void arp_receive(network_interface_t* interface, void* packet);
 
 // ICMP functions
 void icmp_send_echo(network_interface_t* interface, uint32_t dest_ip, uint16_t id, uint16_t sequence);
-void icmp_receive(network_interface_t* interface, ip_header_t* ip_packet);
+void icmp_receive(network_interface_t* interface, ip_header_t* ip_header);
 
 // Socket functions
 int socket_create(int type, int protocol);

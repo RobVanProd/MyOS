@@ -3,14 +3,22 @@
 
 #include <stdint.h>
 
-// Size of physical memory bitmap (assuming 4GB RAM max)
-#define PHYS_BLOCKS_MAX (1024 * 1024)  // 4GB / 4KB = 1M blocks
-
-// Minimum block size (including header)
-#define MIN_BLOCK_SIZE 32
-
-// Magic number for heap block validation
+// Heap magic number for integrity checks
 #define HEAP_MAGIC 0x123890AB
+
+// Heap flags
+#define HEAP_SUPERVISOR 0x1
+#define HEAP_READONLY  0x2
+
+// Heap structure
+typedef struct {
+    uint32_t start_address;
+    uint32_t end_address;
+    uint32_t max_address;
+    uint32_t current_size;
+    uint8_t supervisor;
+    uint8_t readonly;
+} heap_t;
 
 // Memory block header structure
 typedef struct block_header {
@@ -21,16 +29,6 @@ typedef struct block_header {
     struct block_header *prev;         // Previous block in the list
     uint32_t checksum;                 // Checksum for validation
 } block_header_t;
-
-// Heap structure
-typedef struct {
-    uint32_t start_address;            // Start of heap area
-    uint32_t end_address;              // End of heap area
-    uint32_t max_address;              // Maximum heap size
-    uint8_t supervisor;                // Should extra pages requested be mapped as supervisor-only?
-    uint8_t readonly;                  // Should extra pages requested be mapped as read-only?
-    block_header_t *free_list;         // List of free blocks
-} heap_t;
 
 // Initialize kernel heap
 void init_kheap(void);
@@ -85,4 +83,4 @@ int handle_cow_fault(uint32_t fault_addr);
 void heap_dump(void);
 int heap_check(void);
 
-#endif 
+#endif

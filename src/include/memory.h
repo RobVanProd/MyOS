@@ -9,8 +9,8 @@ void* kmalloc(size_t size);
 void kfree(void* ptr);
 void* krealloc(void* ptr, size_t size);
 
-// Memory mapping functions
-void* mmap(void* addr, size_t length, int prot, int flags);
+// Memory mapping function
+void *mmap(void *addr, uint32_t length, int prot, int flags, int fd, uint32_t offset);
 int munmap(void* addr, size_t length);
 
 // Page allocation

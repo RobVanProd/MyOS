@@ -1,73 +1,195 @@
 #include "kheap.h"
+#include "memory.h"
 #include "paging.h"
 #include "terminal.h"
+#include <memory.h>
+#include <string.h>
+#include <stdint.h>
+
+// Minimum block size (including header)
+#define MIN_BLOCK_SIZE 32
+
+// Block header structure
+typedef struct block_header {
+    uint32_t magic;
+    uint32_t size;
+    uint8_t is_free;
+    struct block_header* next;
+    struct block_header* prev;
+    uint32_t checksum;
+} block_header_t;
+
+// Frame allocation function
+static uint32_t find_free_frame(void) {
+    static uint32_t frame = 0;
+    // Simple frame allocation strategy - just increment
+    // In a real OS, you'd want to track free frames
+    return frame++;
+}
 
 // End of kernel's code/data - defined in linker script
 extern uint32_t end;
 uint32_t placement_address = (uint32_t)&end;
 
 // Kernel heap
-static heap_t *kheap = NULL;
+static heap_t* kheap = NULL;
 
-// Calculate block header checksum
-static uint32_t calculate_checksum(block_header_t *header) {
-    return header->magic ^ header->size ^ (uint32_t)header->next ^ (uint32_t)header->prev;
+// Calculate checksum for a block header
+static uint32_t calculate_checksum(block_header_t* header) {
+    uint32_t sum = 0;
+    uint32_t* ptr = (uint32_t*)header;
+    for (size_t i = 0; i < (sizeof(block_header_t) - sizeof(uint32_t)) / 4; i++) {
+        sum += ptr[i];
+    }
+    return sum;
 }
 
-// Validate block header
-static int validate_header(block_header_t *header) {
-    if (header->magic != HEAP_MAGIC) return 0;
-    if (header->checksum != calculate_checksum(header)) return 0;
-    return 1;
-}
-
-// Update block header checksum
-static void update_checksum(block_header_t *header) {
+// Update checksum for a block header
+static void update_checksum(block_header_t* header) {
     header->checksum = calculate_checksum(header);
 }
 
-// Create a new heap
-heap_t *create_heap(uint32_t start, uint32_t end, uint32_t max, uint8_t supervisor, uint8_t readonly) {
-    heap_t *heap = (heap_t*)kmalloc(sizeof(heap_t));
+// Validate block header
+static int validate_header(block_header_t* header) {
+    if (!header) return 0;
+    if (header->magic != HEAP_MAGIC) return 0;
+    if (calculate_checksum(header) != header->checksum) return 0;
+    return 1;
+}
+
+// Initialize kernel heap
+void init_kheap(void) {
+    // Start with a small heap (16MB)
+    uint32_t heap_start = 0xC0400000;
+    uint32_t heap_end = heap_start + 0x1000000;
+    uint32_t heap_max = heap_start + 0x10000000;
     
-    // Align start and end addresses
-    start = (start + 0xFFF) & ~0xFFF;
-    end = end & ~0xFFF;
+    // Map initial heap pages
+    for (uint32_t addr = heap_start; addr < heap_end; addr += PAGE_SIZE) {
+        uint32_t flags = PAGE_PRESENT | PAGE_WRITE;
+        map_page(addr, find_free_frame(), flags);
+    }
+    
+    kheap = create_heap(heap_start, heap_end, heap_max, 1, 0);
+}
+
+// Allocate memory
+void* kmalloc(uint32_t size) {
+    if (!kheap) {
+        // Early allocation before heap is initialized
+        uint32_t addr = placement_address;
+        placement_address += size;
+        return (void*)addr;
+    }
+    
+    return heap_alloc(kheap, size);
+}
+
+// Allocate aligned memory
+void* kmalloc_aligned(uint32_t size) {
+    if (!kheap) {
+        uint32_t addr = placement_address;
+        if (addr & 0xFFFFF000) {
+            addr &= 0xFFFFF000;
+            addr += 0x1000;
+        }
+        placement_address = addr + size;
+        return (void*)addr;
+    }
+    
+    // Round up size to page boundary
+    size = (size + 0xFFF) & 0xFFFFF000;
+    return heap_alloc(kheap, size);
+}
+
+// Allocate physical memory
+void* kmalloc_physical(uint32_t size, uint32_t* physical) {
+    void* addr = kmalloc(size);
+    if (physical) {
+        *physical = (uint32_t)addr - KERNEL_VIRTUAL_BASE;
+    }
+    return addr;
+}
+
+// Allocate aligned physical memory
+void* kmalloc_aligned_physical(uint32_t size, uint32_t* physical) {
+    void* addr = kmalloc_aligned(size);
+    if (physical) {
+        *physical = (uint32_t)addr - KERNEL_VIRTUAL_BASE;
+    }
+    return addr;
+}
+
+// Free memory
+void kfree(void* ptr) {
+    if (!ptr) return;
+    heap_free(kheap, ptr);
+}
+
+// Create a new heap
+heap_t* create_heap(uint32_t start, uint32_t end, uint32_t max, uint8_t supervisor, uint8_t readonly) {
+    heap_t* heap = (heap_t*)kmalloc(sizeof(heap_t));
+    if (!heap) return NULL;
     
     heap->start_address = start;
     heap->end_address = end;
     heap->max_address = max;
     heap->supervisor = supervisor;
     heap->readonly = readonly;
-    
-    // Create initial free block
-    block_header_t *initial_block = (block_header_t*)start;
-    initial_block->magic = HEAP_MAGIC;
-    initial_block->size = end - start;
-    initial_block->is_free = 1;
-    initial_block->next = NULL;
-    initial_block->prev = NULL;
-    update_checksum(initial_block);
-    
-    heap->free_list = initial_block;
+    heap->current_size = 0;
     
     return heap;
 }
 
-// Initialize kernel heap
-void init_kheap(void) {
-    // Create kernel heap starting at 3GB
-    uint32_t heap_start = 0xC0000000;
-    uint32_t heap_end = heap_start + 0x400000; // Initial size: 4MB
-    uint32_t heap_max = heap_start + 0x1000000; // Max size: 16MB
+// Allocate memory from heap
+void* heap_alloc(heap_t* heap, uint32_t size) {
+    if (!heap || size == 0) return NULL;
     
-    // Map initial heap pages
-    for (uint32_t addr = heap_start; addr < heap_end; addr += PAGE_SIZE) {
-        map_page(addr, find_free_frame(), 1, 1);
+    // Round up to nearest page size
+    size = (size + 0xFFF) & 0xFFFFF000;
+    
+    uint32_t addr = heap->start_address + heap->current_size;
+    if (addr + size > heap->max_address) return NULL;
+    
+    // Map pages
+    for (uint32_t i = 0; i < size; i += 0x1000) {
+        uint32_t flags = PAGE_PRESENT | PAGE_WRITE;
+        if (!heap->supervisor) flags |= PAGE_USER;
+        map_page(addr + i, find_free_frame(), flags);
     }
     
-    kheap = create_heap(heap_start, heap_end, heap_max, 1, 0);
+    heap->current_size += size;
+    return (void*)addr;
 }
+
+// Free memory in heap
+void heap_free(heap_t* heap, void* ptr) {
+    if (!heap || !ptr) return;
+    
+    uint32_t addr = (uint32_t)ptr;
+    if (addr < heap->start_address || addr >= heap->end_address) return;
+    
+    // Unmap pages
+    uint32_t size = 0x1000;  // Always free at least one page
+    while (addr + size <= heap->end_address) {
+        unmap_page(addr + size - 0x1000);
+        size += 0x1000;
+    }
+    
+    // Update heap size
+    if (addr + size == heap->start_address + heap->current_size) {
+        heap->current_size -= size;
+    }
+}
+
+typedef struct heap {
+    uint32_t start_address;
+    uint32_t end_address;
+    uint32_t max_address;
+    uint32_t current_size;
+    uint8_t supervisor;
+    uint8_t readonly;
+} heap_t;
 
 // Find the best fitting block for a given size
 static block_header_t *find_best_fit(heap_t *heap, uint32_t size) {
@@ -149,7 +271,8 @@ uint32_t expand_heap(heap_t *heap, uint32_t size) {
     
     // Map new pages
     for (uint32_t addr = old_end; addr < heap->end_address; addr += PAGE_SIZE) {
-        map_page(addr, find_free_frame(), heap->supervisor, !heap->readonly);
+        uint32_t flags = PAGE_PRESENT | PAGE_WRITE;
+        map_page(addr, find_free_frame(), flags);
     }
     
     // Create new free block
@@ -172,46 +295,6 @@ uint32_t expand_heap(heap_t *heap, uint32_t size) {
     
     coalesce_blocks(heap);
     return 1;
-}
-
-void *kmalloc(uint32_t size) {
-    if (!kheap) {
-        // If heap isn't initialized, use placement allocator
-        return (void*)placement_address;
-    }
-    
-    // Adjust size to include header and align to 8 bytes
-    size = ((size + sizeof(block_header_t) + 7) & ~7);
-    
-    block_header_t *block = find_best_fit(kheap, size);
-    if (!block) {
-        // No suitable block found, try to expand heap
-        if (!expand_heap(kheap, size > PAGE_SIZE ? size : PAGE_SIZE)) {
-            return NULL;
-        }
-        block = find_best_fit(kheap, size);
-        if (!block) return NULL;
-    }
-    
-    split_block(block, size);
-    block->is_free = 0;
-    update_checksum(block);
-    
-    return (void*)((uint32_t)block + sizeof(block_header_t));
-}
-
-void kfree(void *ptr) {
-    if (!ptr) return;
-    
-    block_header_t *block = (block_header_t*)((uint32_t)ptr - sizeof(block_header_t));
-    if (!validate_header(block)) {
-        terminal_writestring("Attempt to free invalid block!\n");
-        return;
-    }
-    
-    block->is_free = 1;
-    update_checksum(block);
-    coalesce_blocks(kheap);
 }
 
 void get_heap_stats(uint32_t *total_blocks, uint32_t *free_blocks, uint32_t *largest_free) {
@@ -290,4 +373,4 @@ int heap_check(void) {
         block = block->next;
     }
     return 1;
-} 
+}

@@ -1,13 +1,30 @@
-#include "idt.h"
-#include "terminal.h"
+#include <stdint.h>
 #include "interrupt.h"
+#include "io.h"
 
-#define IDT_ENTRIES 256
+// IDT entry structure
+struct idt_entry {
+    uint16_t base_low;
+    uint16_t selector;
+    uint8_t zero;
+    uint8_t flags;
+    uint16_t base_high;
+} __attribute__((packed));
 
-static struct idt_entry idt[IDT_ENTRIES];
-static struct idt_ptr idt_pointer;
+// IDT pointer structure
+struct idt_ptr {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed));
+
+// Declare IDT array
+static struct idt_entry idt[256];
+static struct idt_ptr idtp;
 
 // External assembly functions
+extern void idt_load(struct idt_ptr* ptr);
+
+// ISR handlers from assembly
 extern void isr0(void);
 extern void isr1(void);
 extern void isr2(void);
@@ -41,25 +58,27 @@ extern void isr29(void);
 extern void isr30(void);
 extern void isr31(void);
 
-void idt_set_gate(uint8_t num, uint32_t handler, uint16_t selector, uint8_t flags) {
-    idt[num].base_low = handler & 0xFFFF;
-    idt[num].base_high = (handler >> 16) & 0xFFFF;
-    idt[num].selector = selector;
+// Initialize IDT entry
+static void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
+    idt[num].base_low = base & 0xFFFF;
+    idt[num].base_high = (base >> 16) & 0xFFFF;
+    idt[num].selector = sel;
     idt[num].zero = 0;
     idt[num].flags = flags;
 }
 
-void idt_init(void) {
+// Initialize interrupt handling
+void interrupt_init(void) {
     // Set up IDT pointer
-    idt_pointer.limit = (sizeof(struct idt_entry) * IDT_ENTRIES) - 1;
-    idt_pointer.base = (uint32_t)&idt;
+    idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
+    idtp.base = (uint32_t)&idt;
 
     // Clear IDT
-    for (int i = 0; i < IDT_ENTRIES; i++) {
-        idt_set_gate(i, 0, 0x08, 0x8E);
+    for (int i = 0; i < 256; i++) {
+        idt_set_gate(i, 0, 0, 0);
     }
 
-    // Set up ISR handlers
+    // Install ISR handlers
     idt_set_gate(0, (uint32_t)isr0, 0x08, 0x8E);
     idt_set_gate(1, (uint32_t)isr1, 0x08, 0x8E);
     idt_set_gate(2, (uint32_t)isr2, 0x08, 0x8E);
@@ -93,6 +112,52 @@ void idt_init(void) {
     idt_set_gate(30, (uint32_t)isr30, 0x08, 0x8E);
     idt_set_gate(31, (uint32_t)isr31, 0x08, 0x8E);
 
+    // Remap PIC
+    outb(0x20, 0x11);
+    outb(0xA0, 0x11);
+    outb(0x21, 0x20);
+    outb(0xA1, 0x28);
+    outb(0x21, 0x04);
+    outb(0xA1, 0x02);
+    outb(0x21, 0x01);
+    outb(0xA1, 0x01);
+    outb(0x21, 0x0);
+    outb(0xA1, 0x0);
+
     // Load IDT
-    __asm__ volatile("lidt %0" : : "m"(idt_pointer));
+    idt_load(&idtp);
+
+    // Enable interrupts
+    __asm__ volatile("sti");
+}
+
+#include "interrupt.h"
+#include "io.h"
+
+// Interrupt handlers
+static interrupt_handler_t interrupt_handlers[256];
+
+// Register an interrupt handler
+void register_interrupt_handler(uint8_t n, interrupt_handler_t handler) {
+    interrupt_handlers[n] = handler;
+}
+
+// Common interrupt handler
+void isr_handler(registers_t regs) {
+    if (interrupt_handlers[regs.int_no]) {
+        interrupt_handlers[regs.int_no](regs);
+    }
+}
+
+// IRQ handler
+void irq_handler(registers_t regs) {
+    // Send an EOI (end of interrupt) signal to the PICs
+    if (regs.int_no >= 40) {
+        outb(0xA0, 0x20); // Send reset signal to slave
+    }
+    outb(0x20, 0x20); // Send reset signal to master
+
+    if (interrupt_handlers[regs.int_no]) {
+        interrupt_handlers[regs.int_no](regs);
+    }
 }

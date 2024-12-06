@@ -116,6 +116,11 @@ int driver_unregister(driver_t* driver);
 driver_t* driver_find(const char* name);
 driver_t* driver_find_by_type(driver_type_t type);
 
+// Driver initialization functions
+void driver_init(void);
+void driver_register_storage(void);
+void driver_register_network(void);
+
 // Driver utility functions
 int driver_init_all(void);
 int driver_cleanup_all(void);
@@ -167,4 +172,4 @@ const char* driver_error_string(int error);
 #define DRIVER_CLEAR_FLAG(drv, f) ((drv)->flags &= ~(f))
 #define DRIVER_TEST_FLAG(drv, f)  ((drv)->flags & (f))
 
-#endif 
+#endif

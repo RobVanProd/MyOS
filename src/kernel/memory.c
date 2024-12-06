@@ -1,5 +1,6 @@
 #include <memory.h>
 #include <string.h>
+#include "kheap.h"
 
 // Memory map entry structure
 typedef struct {
@@ -57,29 +58,6 @@ size_t get_used_memory(void) {
     return get_total_memory() - get_free_memory();
 }
 
-// Simple memory allocation
-static void* heap_start = (void*)0x200000;  // Start heap at 2MB
-static void* heap_end = (void*)0x400000;    // End heap at 4MB
-static void* next_free = (void*)0x200000;
-
-void* kmalloc(size_t size) {
-    // Align size to 4 bytes
-    size = (size + 3) & ~3;
-    
-    if (next_free + size > heap_end) {
-        return NULL;
-    }
-    
-    void* ptr = next_free;
-    next_free += size;
-    return ptr;
-}
-
-void kfree(void* ptr) {
-    // Simple allocator - no real free for now
-    (void)ptr;
-}
-
 void* krealloc(void* ptr, size_t size) {
     if (!ptr) {
         return kmalloc(size);
@@ -96,15 +74,19 @@ void* krealloc(void* ptr, size_t size) {
 }
 
 // Memory mapping
-void* mmap(void* addr, size_t length, int prot, int flags) {
-    (void)addr;
-    (void)prot;
-    (void)flags;
+void* mmap(void* addr, uint32_t length, int prot, int flags, int fd, uint32_t offset) {
+    // Simple implementation - just allocate memory
+    (void)addr;    // Unused
+    (void)prot;    // Unused
+    (void)flags;   // Unused
+    (void)fd;      // Unused
+    (void)offset;  // Unused
+    
     return kmalloc(length);
 }
 
 int munmap(void* addr, size_t length) {
+    (void)addr;
     (void)length;
-    kfree(addr);
-    return 0;
+    return 0;  // Always succeed for now
 }

@@ -1,4 +1,6 @@
 #include "paging.h"
+#include "string.h"
+#include "kprintf.h"
 #include "kheap.h"
 #include "terminal.h"
 
@@ -179,4 +181,71 @@ void page_fault_handler(void) {
     hex[8] = '\0';
     terminal_writestring(hex);
     terminal_writestring("\n");
-} 
+}
+
+// Function to map a virtual page to a physical frame
+void map_page(uint32_t virtual_addr, uint32_t physical_addr, uint32_t flags) {
+    page_t* page = get_page(virtual_addr, 1, current_directory);
+    if (!page) {
+        kprintf("Failed to get page for virtual address %x\n", virtual_addr);
+        return;
+    }
+    
+    page->present = 1;
+    page->rw = (flags & PAGE_WRITE) ? 1 : 0;
+    page->user = (flags & PAGE_USER) ? 1 : 0;
+    page->frame = physical_addr >> 12;
+}
+
+// Function to unmap a virtual page
+void unmap_page(uint32_t virtual_addr) {
+    page_t* page = get_page(virtual_addr, 0, current_directory);
+    if (!page) {
+        return;
+    }
+    
+    page->present = 0;
+    page->frame = 0;
+}
+
+// Function to create a new page directory
+page_directory_t* create_page_directory(void) {
+    uint32_t phys;
+    page_directory_t* dir = (page_directory_t*)kmalloc_aligned_physical(sizeof(page_directory_t), &phys);
+    memset(dir, 0, sizeof(page_directory_t));
+    
+    // Copy kernel page tables
+    for (int i = 0; i < 1024; i++) {
+        if (kernel_directory->tables[i]) {
+            dir->tables[i] = kernel_directory->tables[i];
+            dir->tables_physical[i] = kernel_directory->tables_physical[i];
+        }
+    }
+    
+    return dir;
+}
+
+// Function to free a page directory
+void free_page_directory(page_directory_t* dir) {
+    if (!dir) return;
+    
+    // Free all page tables
+    for (int i = 0; i < 1024; i++) {
+        if (dir->tables[i] && dir->tables[i] != kernel_directory->tables[i]) {
+            // Free all pages in this table
+            for (int j = 0; j < 1024; j++) {
+                if (dir->tables[i]->pages[j].present) {
+                    free_frame(&dir->tables[i]->pages[j]);
+                }
+            }
+            kfree(dir->tables[i]);
+        }
+    }
+    
+    kfree(dir);
+}
+
+// Function to get the kernel's page directory
+page_directory_t* get_kernel_page_directory(void) {
+    return kernel_directory;
+}

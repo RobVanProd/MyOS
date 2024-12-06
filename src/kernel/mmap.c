@@ -1,7 +1,19 @@
 #include "mmap.h"
 #include "paging.h"
-#include "kheap.h"
+#include "memory.h"
 #include "terminal.h"
+#include <string.h>
+
+// Declare kernel_directory as external
+extern page_directory_t *kernel_directory;
+
+// Frame allocation function (should be in paging.c)
+static uint32_t find_free_frame(void) {
+    static uint32_t frame = 0;
+    // Simple frame allocation strategy - just increment
+    // In a real OS, you'd want to track free frames
+    return frame++;
+}
 
 // List of memory mappings
 static mmap_entry_t *mmap_list = NULL;
@@ -227,4 +239,4 @@ void dump_mappings(void) {
         terminal_writestring("\n");
         entry = entry->next;
     }
-} 
+}

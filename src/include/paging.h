@@ -2,26 +2,26 @@
 #define PAGING_H
 
 #include <stdint.h>
+#include <isr.h>  // For registers_t
 
 // Page size is 4KB
 #define PAGE_SIZE 0x1000
 
-// Page table/directory entry flags
-#define PAGE_PRESENT   0x1
-#define PAGE_WRITE     0x2
-#define PAGE_USER      0x4
-#define PAGE_ACCESSED  0x20
-#define PAGE_DIRTY     0x40
+// Page flags
+#define PAGE_PRESENT     0x1
+#define PAGE_WRITE      0x2
+#define PAGE_USER       0x4
+#define PAGE_ACCESSED   0x20
+#define PAGE_DIRTY      0x40
 
-// Page directory and table structures
 typedef struct page {
     uint32_t present    : 1;   // Page present in memory
-    uint32_t rw         : 1;   // Read-only if clear, readwrite if set
-    uint32_t user       : 1;   // Supervisor level only if clear
-    uint32_t accessed   : 1;   // Has the page been accessed since last refresh?
-    uint32_t dirty      : 1;   // Has the page been written to since last refresh?
-    uint32_t unused     : 7;   // Unused and reserved bits
-    uint32_t frame      : 20;  // Frame address (shifted right 12 bits)
+    uint32_t rw        : 1;   // Read-only if clear, readwrite if set
+    uint32_t user      : 1;   // Supervisor level only if clear
+    uint32_t accessed  : 1;   // Has the page been accessed since last refresh?
+    uint32_t dirty     : 1;   // Has the page been written to since last refresh?
+    uint32_t unused    : 7;   // Amalgamation of unused and reserved bits
+    uint32_t frame     : 20;  // Frame address (shifted right 12 bits)
 } page_t;
 
 typedef struct page_table {
@@ -37,31 +37,15 @@ typedef struct page_directory {
     uint32_t physical_addr;
 } page_directory_t;
 
-// Initialize paging
+// Function declarations
 void init_paging(void);
-
-// Load page directory into CR3 register
 void switch_page_directory(page_directory_t *dir);
-
-// Get a page from the current page directory
 page_t *get_page(uint32_t address, int make, page_directory_t *dir);
-
-// Page fault handler
-void page_fault_handler(void);
-
-// Allocate a frame
-void alloc_frame(page_t *page, int is_kernel, int is_writeable);
-
-// Free a frame
-void free_frame(page_t *page);
-
-// Map virtual address to physical address
-void map_page(uint32_t virtual_addr, uint32_t physical_addr, int is_kernel, int is_writeable);
-
-// Unmap virtual address
+void page_fault(registers_t *regs);
+void map_page(uint32_t virtual_addr, uint32_t physical_addr, uint32_t flags);
 void unmap_page(uint32_t virtual_addr);
+page_directory_t* create_page_directory(void);
+void free_page_directory(page_directory_t* dir);
+page_directory_t* get_kernel_page_directory(void);
 
-// Get the physical address for a virtual address
-uint32_t get_physical_address(uint32_t virtual_addr);
-
-#endif 
+#endif

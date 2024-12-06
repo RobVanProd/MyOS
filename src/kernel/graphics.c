@@ -1,13 +1,16 @@
 #include "graphics.h"
 #include "io.h"
 #include "terminal.h"
+#include <stdlib.h>
+#include <string.h>
+#include "kheap.h"
 
 // VGA memory
 static uint8_t* vga_memory = (uint8_t*)0xA0000;
 static uint8_t* back_buffer = NULL;
 
 // Window management
-static window_t* window_list = NULL;
+window_t* window_list = NULL;
 static window_t* active_window = NULL;
 
 // Mouse cursor position
@@ -33,7 +36,7 @@ void graphics_init(void) {
     }
     
     // Allocate back buffer
-    back_buffer = kmalloc(SCREEN_WIDTH * SCREEN_HEIGHT);
+    back_buffer = (uint8_t*)kmalloc(SCREEN_WIDTH * SCREEN_HEIGHT);
     
     // Clear screen
     clear_screen(COLOR_BACKGROUND);
@@ -46,8 +49,8 @@ void set_pixel(int x, int y, uint8_t color) {
 }
 
 void draw_line(int x1, int y1, int x2, int y2, uint8_t color) {
-    int dx = abs(x2 - x1);
-    int dy = abs(y2 - y1);
+    int dx = (x2 > x1) ? (x2 - x1) : (x1 - x2);
+    int dy = (y2 > y1) ? (y2 - y1) : (y1 - y2);
     int sx = x1 < x2 ? 1 : -1;
     int sy = y1 < y2 ? 1 : -1;
     int err = (dx > dy ? dx : -dy) / 2;
@@ -107,28 +110,39 @@ void draw_string_with_bg(int x, int y, const char* str, uint8_t fg_color, uint8_
     }
 }
 
-window_t* create_window(int x, int y, int width, int height, const char* title, uint8_t flags) {
-    window_t* window = kmalloc(sizeof(window_t));
+window_t* create_window(int x, int y, int width, int height, const char* title, uint32_t flags) {
+    window_t* window = (window_t*)kmalloc(sizeof(window_t));
     if (!window) return NULL;
-    
+
     window->x = x;
     window->y = y;
     window->width = width;
     window->height = height;
     window->flags = flags;
-    window->buffer = kmalloc(width * height);
-    window->title = NULL;
+    window->data = NULL;
+    window->on_key = NULL;
+    window->on_click = NULL;
+    window->on_draw = NULL;
+    window->next = NULL;
     
-    if (title) {
-        int len = 0;
-        while (title[len]) len++;
-        window->title = kmalloc(len + 1);
-        for (int i = 0; i <= len; i++) {
-            window->title[i] = title[i];
-        }
+    // Allocate window buffer
+    window->buffer = (uint8_t*)kmalloc(width * height);
+    if (!window->buffer) {
+        kfree(window);
+        return NULL;
     }
-    
-    // Add to window list
+    memset(window->buffer, 0, width * height);
+
+    if (title) {
+        size_t len = strlen(title);
+        if (len > 31) len = 31;  // Ensure we don't overflow the fixed-size array
+        strncpy(window->title, title, len);
+        window->title[len] = '\0';
+    } else {
+        window->title[0] = '\0';
+    }
+
+    // Add window to list
     window->next = window_list;
     window_list = window;
     active_window = window;
@@ -266,4 +280,4 @@ void draw_cursor(int x, int y) {
 void update_cursor(int x, int y) {
     cursor_x = x;
     cursor_y = y;
-} 
+}

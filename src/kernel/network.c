@@ -1,4 +1,6 @@
 #include "network.h"
+#include <string.h>
+#include <stdio.h>
 #include "memory.h"
 
 // Network globals
@@ -37,50 +39,29 @@ void network_init(void) {
 
 // Network interface management
 int network_interface_up(network_interface_t* interface) {
-    if (!interface || num_interfaces >= 4) return -1;
-    
-    interface->flags |= NIC_FLAG_UP;
-    interfaces[num_interfaces++] = interface;
-    
+    if (!interface) return -1;
     return 0;
 }
 
 int network_interface_down(network_interface_t* interface) {
     if (!interface) return -1;
-    
-    interface->flags &= ~NIC_FLAG_UP;
-    
-    // Remove from interfaces array
-    for (int i = 0; i < num_interfaces; i++) {
-        if (interfaces[i] == interface) {
-            for (int j = i; j < num_interfaces - 1; j++) {
-                interfaces[j] = interfaces[j + 1];
-            }
-            interfaces[--num_interfaces] = NULL;
-            break;
-        }
-    }
-    
     return 0;
 }
 
 // Calculate IP checksum
-uint16_t ip_checksum(void* data, uint16_t length) {
+uint16_t ip_checksum(void* data, uint32_t length) {
     uint32_t sum = 0;
     uint16_t* ptr = (uint16_t*)data;
     
-    // Add up all 16-bit words
     while (length > 1) {
         sum += *ptr++;
         length -= 2;
     }
     
-    // Add last byte if present
     if (length > 0) {
         sum += *(uint8_t*)ptr;
     }
     
-    // Add carries
     while (sum >> 16) {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
@@ -89,62 +70,82 @@ uint16_t ip_checksum(void* data, uint16_t length) {
 }
 
 // Send an IP packet
-int ip_send(network_interface_t* interface, uint32_t dest_ip, uint8_t protocol, void* data, uint16_t length) {
-    if (!interface || !data) return -1;
+int ip_send(network_interface_t* interface, uint32_t dest_ip, uint8_t protocol, const void* data, uint32_t length) {
+    uint8_t packet_buffer[2048];
+    ip_header_t* packet = (ip_header_t*)packet_buffer;
     
-    // Allocate buffer for IP packet
-    uint16_t total_length = sizeof(ip_header_t) + length;
-    ip_header_t* packet = kmalloc(total_length);
-    if (!packet) return -1;
-    
-    // Fill IP header
-    packet->version_ihl = 0x45; // IPv4, 5 DWORDS header length
-    packet->tos = 0;
-    packet->total_length = htons(total_length);
-    packet->id = htons(0); // Should be incremented for each packet
-    packet->flags_fragment = 0;
-    packet->ttl = 64;
+    packet->version_ihl = 0x45; // IPv4, 5 DWORDs header
+    packet->type_of_service = 0;
+    packet->total_length = htons(sizeof(ip_header_t) + length);
+    packet->identification = htons(0); // Should be incremented for each packet
+    packet->flags_fragment_offset = 0;
+    packet->time_to_live = 64;
     packet->protocol = protocol;
-    packet->src_ip = interface->ip;
+    packet->source_ip = interface->ip_addr;
     packet->dest_ip = dest_ip;
     
     // Copy data
     memcpy(packet->data, data, length);
     
     // Calculate checksum
-    packet->checksum = 0;
-    packet->checksum = ip_checksum(packet, sizeof(ip_header_t));
+    packet->header_checksum = 0;
+    packet->header_checksum = ip_checksum(packet, sizeof(ip_header_t));
     
-    // Send packet
-    int result = network_send_packet(interface, packet, total_length);
-    
-    kfree(packet);
-    return result;
+    return network_send_packet(interface, packet, sizeof(ip_header_t) + length);
+}
+
+// Send a raw network packet
+int network_send_packet(network_interface_t* interface, const void* data, uint32_t length) {
+    if (!interface || !interface->send || !data || length == 0) {
+        return -1;
+    }
+    return interface->send(interface, data, length);
 }
 
 // Handle received IP packet
-void ip_receive(network_interface_t* interface, ip_header_t* packet) {
-    if (!interface || !packet) return;
+void network_receive_packet(network_interface_t* interface, const void* data, uint32_t length) {
+    if (!data || length < sizeof(ip_header_t)) return;
+    
+    ip_header_t* ip_header = (ip_header_t*)data;
     
     // Verify checksum
-    uint16_t orig_checksum = packet->checksum;
-    packet->checksum = 0;
-    if (ip_checksum(packet, sizeof(ip_header_t)) != orig_checksum) {
+    uint16_t orig_checksum = ip_header->header_checksum;
+    ip_header->header_checksum = 0;
+    if (ip_checksum(ip_header, sizeof(ip_header_t)) != orig_checksum) {
         return; // Invalid checksum
     }
+    ip_header->header_checksum = orig_checksum;
     
-    // Handle based on protocol
-    switch (packet->protocol) {
-        case IP_PROTO_ICMP:
-            icmp_receive(interface, packet);
+    // Handle different protocols
+    switch (ip_header->protocol) {
+        case IP_PROTOCOL_ICMP:
+            icmp_receive(interface, ip_header);
             break;
-            
-        case IP_PROTO_TCP:
-            // TODO: Implement TCP handling
+        default:
             break;
+    }
+}
+
+// Handle received ICMP packet
+void icmp_receive(network_interface_t* interface, ip_header_t* ip_header) {
+    if (!interface || !ip_header) return;
+    
+    icmp_header_t* icmp = (icmp_header_t*)ip_header->data;
+    uint32_t icmp_length = ntohs(ip_header->total_length) - sizeof(ip_header_t);
+    
+    if (icmp_length < sizeof(icmp_header_t)) return;
+    
+    switch (icmp->type) {
+        case ICMP_ECHO_REQUEST:
+            // Send echo reply
+            icmp->type = ICMP_ECHO_REPLY;
+            icmp->checksum = 0;
+            icmp->checksum = ip_checksum(icmp, icmp_length);
             
-        case IP_PROTO_UDP:
-            // TODO: Implement UDP handling
+            ip_send(interface, ntohl(ip_header->source_ip), IP_PROTOCOL_ICMP, 
+                   icmp, icmp_length);
+            break;
+        default:
             break;
     }
 }
@@ -234,4 +235,4 @@ uint32_t htonl(uint32_t value) {
 
 uint32_t ntohl(uint32_t value) {
     return htonl(value);
-} 
+}

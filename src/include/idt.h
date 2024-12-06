@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 // Interrupt handler function type
-typedef void (*isr_t)(void);
+typedef uint32_t isr_t;
 
 // IDT entry structure
 struct idt_entry {
@@ -25,9 +25,9 @@ struct idt_ptr {
 void idt_init(void);
 
 // Install an interrupt handler
-void idt_set_gate(uint8_t num, isr_t handler, uint16_t selector, uint8_t flags);
+void idt_set_gate(uint8_t num, uint32_t handler, uint16_t selector, uint8_t flags);
 
 // Load the IDT
 extern void idt_load(struct idt_ptr* idt_ptr_addr);
 
-#endif 
+#endif /* IDT_H */
