@@ -122,6 +122,33 @@ buffer_t* buf = create_sound_buffer(FORMAT_PCM16);
 play_sound(buf, volume);
 ```
 
+#### Command System
+
+The command system provides a flexible framework for registering and executing commands in both kernel and user space. It consists of two main components:
+
+### 1. Kernel Command System
+- Handles command registration and execution
+- Provides a simple argument parsing system
+- Supports both built-in and dynamically registered commands
+- Manages command history and input handling
+
+### 2. Shell Interface
+- Window-based command-line interface
+- Command history navigation
+- Line editing capabilities
+- Built-in commands for file and system management
+- Integration with the window manager
+
+The command system architecture follows these principles:
+1. **Separation of Concerns**: Command handling is separate from the user interface
+2. **Extensibility**: New commands can be easily added
+3. **Consistency**: Common command-line conventions are followed
+4. **Error Handling**: Robust error checking and reporting
+
+For detailed information:
+- [Command System API](api/command.md)
+- [Shell User Guide](user/shell.md)
+
 ## Communication Flow
 
 1. **User Space to Kernel**
@@ -211,4 +238,4 @@ When contributing to MyOS, keep these architectural principles in mind:
 - [File System Documentation](core/filesystem.md)
 - [Network Stack Documentation](core/network.md)
 - [Graphics System Documentation](core/graphics.md)
-- [Sound System Documentation](core/sound.md) 
+- [Sound System Documentation](core/sound.md)
