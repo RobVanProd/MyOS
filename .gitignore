@@ -9,14 +9,26 @@
 *.exe
 *.out
 *.app
-*.bin
 
 # Debug files
 *.dSYM/
 
+# Cross compiler
+cross-compiler/
+
 # IDE specific files
 .vscode/
 .idea/
+*.swp
+*~
+
+# Temporary files
+*.tmp
+*.bak
+
+# Downloaded installers
+mingw-get-setup.exe
+msys2-installer.exe
 
 # OS specific files
 .DS_Store
@@ -25,4 +37,4 @@
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db

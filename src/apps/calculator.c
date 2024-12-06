@@ -1,25 +1,29 @@
 #include "calculator.h"
-#include "../kernel/memory.h"
+#include <memory.h>
+#include <graphics.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 // Button definitions
 static const struct {
     char label[4];
-    uint8_t type;
-    uint8_t value;
+    int type;
+    char value;
 } button_defs[] = {
-    {"7", BUTTON_NUMBER, 7},
-    {"8", BUTTON_NUMBER, 8},
-    {"9", BUTTON_NUMBER, 9},
+    {"7", BUTTON_NUMBER, '7'},
+    {"8", BUTTON_NUMBER, '8'},
+    {"9", BUTTON_NUMBER, '9'},
     {"/", BUTTON_OPERATOR, '/'},
-    {"4", BUTTON_NUMBER, 4},
-    {"5", BUTTON_NUMBER, 5},
-    {"6", BUTTON_NUMBER, 6},
+    {"4", BUTTON_NUMBER, '4'},
+    {"5", BUTTON_NUMBER, '5'},
+    {"6", BUTTON_NUMBER, '6'},
     {"*", BUTTON_OPERATOR, '*'},
-    {"1", BUTTON_NUMBER, 1},
-    {"2", BUTTON_NUMBER, 2},
-    {"3", BUTTON_NUMBER, 3},
+    {"1", BUTTON_NUMBER, '1'},
+    {"2", BUTTON_NUMBER, '2'},
+    {"3", BUTTON_NUMBER, '3'},
     {"-", BUTTON_OPERATOR, '-'},
-    {"0", BUTTON_NUMBER, 0},
+    {"0", BUTTON_NUMBER, '0'},
     {".", BUTTON_DECIMAL, '.'},
     {"=", BUTTON_EQUAL, '='},
     {"+", BUTTON_OPERATOR, '+'},
@@ -32,8 +36,17 @@ calculator_t* create_calculator(int x, int y) {
     calculator_t* calc = kmalloc(sizeof(calculator_t));
     if (!calc) return NULL;
     
+    // Initialize calculator data
+    calc->display[0] = '0';
+    calc->display[1] = '\0';
+    calc->display_pos = 1;
+    calc->current_value = 0;
+    calc->stored_value = 0;
+    calc->current_operator = 0;
+    calc->new_number = 1;
+    
     // Create window
-    calc->window = create_window(x, y, CALC_WIDTH, CALC_HEIGHT, "Calculator",
+    calc->window = create_window(x, y, 200, 250, "Calculator", 
         WINDOW_MOVABLE | WINDOW_HAS_TITLE | WINDOW_HAS_CLOSE);
     
     if (!calc->window) {
@@ -41,69 +54,103 @@ calculator_t* create_calculator(int x, int y) {
         return NULL;
     }
     
-    // Initialize calculator state
-    calc->display_pos = 0;
-    calc->display[0] = '0';
-    calc->display[1] = '\0';
-    calc->current_value = 0;
-    calc->stored_value = 0;
-    calc->current_operator = 0;
-    calc->new_number = true;
+    // Initialize buttons
+    int button_width = (200 - 50) / 4;
+    int button_height = 30;
+    int start_x = 10;
+    int start_y = 75;
+    size_t num_buttons = sizeof(button_defs) / sizeof(button_defs[0]);
     
-    // Set up buttons
-    int button_x = 10;
-    int button_y = CALC_DISPLAY_HEIGHT + 10;
-    int button_index = 0;
-    
-    for (int row = 0; row < 5; row++) {
-        for (int col = 0; col < 4; col++) {
-            if (button_index >= sizeof(button_defs) / sizeof(button_defs[0])) break;
-            
-            calc->buttons[button_index].x = button_x + col * (CALC_BUTTON_WIDTH + 5);
-            calc->buttons[button_index].y = button_y + row * (CALC_BUTTON_HEIGHT + 5);
-            calc->buttons[button_index].width = CALC_BUTTON_WIDTH;
-            calc->buttons[button_index].height = CALC_BUTTON_HEIGHT;
-            strcpy(calc->buttons[button_index].label, button_defs[button_index].label);
-            calc->buttons[button_index].type = button_defs[button_index].type;
-            calc->buttons[button_index].value = button_defs[button_index].value;
-            
-            button_index++;
-        }
+    for (size_t i = 0; i < num_buttons; i++) {
+        strcpy(calc->buttons[i].label, button_defs[i].label);
+        calc->buttons[i].type = button_defs[i].type;
+        calc->buttons[i].value = button_defs[i].value;
+        calc->buttons[i].x = start_x + (i % 4) * (button_width + 10);
+        calc->buttons[i].y = start_y + (i / 4) * (button_height + 10);
+        calc->buttons[i].width = button_width;
+        calc->buttons[i].height = button_height;
     }
     
     // Set window callbacks
-    calc->window->on_click = calculator_handle_click;
     calc->window->on_key = calculator_handle_key;
+    calc->window->on_click = calculator_handle_click;
     calc->window->on_draw = calculator_draw;
+    calc->window->data = calc;
     
     return calc;
 }
 
-// Destroy calculator
 void destroy_calculator(calculator_t* calc) {
     if (!calc) return;
     destroy_window(calc->window);
     kfree(calc);
 }
 
-// Handle mouse click
+void calculator_handle_key(window_t* window, char key) {
+    calculator_t* calc = (calculator_t*)window->data;
+    
+    // Handle backspace
+    if (key == '\b') {
+        if (calc->display_pos > 0) {
+            calc->display[--calc->display_pos] = '\0';
+        }
+    }
+    // Handle numbers and operators
+    else if ((key >= '0' && key <= '9') || 
+             key == '+' || key == '-' || 
+             key == '*' || key == '/' || 
+             key == '.' || key == '=') {
+        if (calc->display_pos < CALC_MAX_DIGITS) {
+            calc->display[calc->display_pos++] = key;
+            calc->display[calc->display_pos] = '\0';
+            
+            // Calculate result if equals pressed
+            if (key == '=') {
+                calculator_calculate(calc);
+            }
+        }
+    }
+    
+    // Request redraw
+    window_invalidate(window);
+}
+
 void calculator_handle_click(window_t* window, int x, int y) {
-    calculator_t* calc = (calculator_t*)window->user_data;
-    if (!calc) return;
+    calculator_t* calc = (calculator_t*)window->data;
+    
+    // Convert to window-relative coordinates
+    x -= window->x;
+    y -= window->y;
     
     // Check each button
-    for (int i = 0; i < sizeof(button_defs) / sizeof(button_defs[0]); i++) {
+    size_t num_buttons = sizeof(button_defs) / sizeof(button_defs[0]);
+    for (size_t i = 0; i < num_buttons; i++) {
         if (x >= calc->buttons[i].x && x < calc->buttons[i].x + calc->buttons[i].width &&
             y >= calc->buttons[i].y && y < calc->buttons[i].y + calc->buttons[i].height) {
             
             // Handle button press
             switch (calc->buttons[i].type) {
                 case BUTTON_NUMBER:
-                    calculator_add_digit(calc, calc->buttons[i].value);
+                    calculator_add_digit(calc, calc->buttons[i].value - '0');
                     break;
                     
                 case BUTTON_OPERATOR:
-                    calculator_set_operator(calc, calc->buttons[i].value);
+                    char op = calc->buttons[i].value;
+                    size_t len = strlen(calc->display);
+                    
+                    // Don't add operator if display is empty or ends with operator
+                    if (len == 0 || strchr("+-*/", calc->display[len-1])) {
+                        continue;
+                    }
+                    
+                    // Add space before operator
+                    if (len > 0 && calc->display[len-1] != ' ') {
+                        calc->display[len++] = ' ';
+                    }
+                    calc->display[len++] = op;
+                    calc->display[len++] = ' ';
+                    calc->display[len] = '\0';
+                    calc->display_pos = len;
                     break;
                     
                 case BUTTON_EQUAL:
@@ -122,67 +169,35 @@ void calculator_handle_click(window_t* window, int x, int y) {
                     calculator_backspace(calc);
                     break;
             }
+            
+            // Request redraw
+            window_invalidate(window);
             break;
         }
     }
 }
 
-// Handle keyboard input
-void calculator_handle_key(window_t* window, char key) {
-    calculator_t* calc = (calculator_t*)window->user_data;
-    if (!calc) return;
-    
-    if (key >= '0' && key <= '9') {
-        calculator_add_digit(calc, key - '0');
-    }
-    else if (key == '+' || key == '-' || key == '*' || key == '/') {
-        calculator_set_operator(calc, key);
-    }
-    else if (key == '=' || key == '\n') {
-        calculator_calculate(calc);
-    }
-    else if (key == 'c' || key == 'C') {
-        calculator_clear(calc);
-    }
-    else if (key == '.') {
-        calculator_add_decimal(calc);
-    }
-    else if (key == '\b') {
-        calculator_backspace(calc);
-    }
-}
-
-// Draw calculator
 void calculator_draw(window_t* window) {
-    calculator_t* calc = (calculator_t*)window->user_data;
-    if (!calc) return;
+    calculator_t* calc = (calculator_t*)window->data;
     
-    // Draw display background
-    fill_rect(window->x + 10, window->y + 30, CALC_WIDTH - 20, CALC_DISPLAY_HEIGHT,
-             COLOR_WINDOW_BG);
-    draw_rect(window->x + 10, window->y + 30, CALC_WIDTH - 20, CALC_DISPLAY_HEIGHT,
-             COLOR_WINDOW_FRAME);
+    // Clear window
+    draw_rect(window->x, window->y + 25, window->width, window->height - 25, COLOR_WINDOW_BG);
     
-    // Draw display text
-    draw_string_with_bg(window->x + 15, window->y + 45, calc->display,
-                       COLOR_TEXT, COLOR_WINDOW_BG);
+    // Draw display area
+    draw_rect(window->x + 10, window->y + 35, window->width - 20, 30, COLOR_WHITE);
+    draw_string(window->x + 15, window->y + 42, calc->display, COLOR_BLACK);
     
     // Draw buttons
-    for (int i = 0; i < sizeof(button_defs) / sizeof(button_defs[0]); i++) {
+    size_t num_buttons = sizeof(button_defs) / sizeof(button_defs[0]);
+    for (size_t i = 0; i < num_buttons; i++) {
         int x = window->x + calc->buttons[i].x;
         int y = window->y + calc->buttons[i].y;
         
-        // Draw button background
-        fill_rect(x, y, calc->buttons[i].width, calc->buttons[i].height,
-                 COLOR_WINDOW_FRAME);
-        draw_rect(x, y, calc->buttons[i].width, calc->buttons[i].height,
-                 COLOR_HIGHLIGHT);
-        
-        // Draw button label
-        int label_x = x + (calc->buttons[i].width - strlen(calc->buttons[i].label) * 8) / 2;
-        int label_y = y + (calc->buttons[i].height - 8) / 2;
-        draw_string_with_bg(label_x, label_y, calc->buttons[i].label,
-                          COLOR_TEXT, COLOR_WINDOW_FRAME);
+        // Draw button
+        draw_rect(x, y, calc->buttons[i].width, calc->buttons[i].height, COLOR_GRAY);
+        draw_string(x + (calc->buttons[i].width - strlen(calc->buttons[i].label) * 8) / 2,
+                   y + (calc->buttons[i].height - 16) / 2,
+                   calc->buttons[i].label, COLOR_BLACK);
     }
 }
 
@@ -190,7 +205,7 @@ void calculator_draw(window_t* window) {
 void calculator_add_digit(calculator_t* calc, int digit) {
     if (calc->new_number) {
         calc->display_pos = 0;
-        calc->new_number = false;
+        calc->new_number = 0;
     }
     
     if (calc->display_pos < CALC_MAX_DIGITS) {
@@ -207,7 +222,7 @@ void calculator_add_decimal(calculator_t* calc) {
     if (calc->new_number) {
         calc->display_pos = 0;
         calc->display[calc->display_pos++] = '0';
-        calc->new_number = false;
+        calc->new_number = 0;
     }
     
     // Check if decimal already exists
@@ -222,42 +237,61 @@ void calculator_set_operator(calculator_t* calc, char operator) {
     calculator_calculate(calc);
     calc->current_operator = operator;
     calc->stored_value = atof(calc->display);
-    calc->new_number = true;
+    calc->new_number = 1;
 }
 
 // Calculate result
 void calculator_calculate(calculator_t* calc) {
-    if (!calc->current_operator) return;
+    double num1 = 0;
+    double num2 = 0;
+    char operator = '\0';
+    char* token;
+    char temp[CALC_MAX_DIGITS + 1];
     
-    double current = atof(calc->display);
+    // Copy display to temp for tokenizing
+    strncpy(temp, calc->display, CALC_MAX_DIGITS);
+    temp[CALC_MAX_DIGITS] = '\0';
+    
+    // Get first number
+    token = temp;
+    while (*token && (*token >= '0' && *token <= '9' || *token == '.')) token++;
+    char save = *token;
+    *token = '\0';
+    num1 = atof(temp);
+    *token = save;
+    
+    // Get operator
+    while (*token && (*token == ' ' || *token == '\t')) token++;
+    operator = *token++;
+    
+    // Get second number
+    while (*token && (*token == ' ' || *token == '\t')) token++;
+    num2 = atof(token);
+    
+    // Perform calculation
     double result = 0;
-    
-    switch (calc->current_operator) {
-        case '+':
-            result = calc->stored_value + current;
-            break;
-        case '-':
-            result = calc->stored_value - current;
-            break;
-        case '*':
-            result = calc->stored_value * current;
-            break;
-        case '/':
-            if (current != 0) {
-                result = calc->stored_value / current;
+    switch (operator) {
+        case '+': result = num1 + num2; break;
+        case '-': result = num1 - num2; break;
+        case '*': result = num1 * num2; break;
+        case '/': 
+            if (num2 != 0) {
+                result = num1 / num2;
             } else {
-                strcpy(calc->display, "Error");
-                calc->new_number = true;
+                strcpy(calc->display, "Error: Div by 0");
+                calc->display_pos = strlen(calc->display);
                 return;
             }
             break;
+        default:
+            strcpy(calc->display, "Error");
+            calc->display_pos = strlen(calc->display);
+            return;
     }
     
     // Convert result to string
-    sprintf(calc->display, "%.10g", result);
+    sprintf(calc->display, "%.6g", result);
     calc->display_pos = strlen(calc->display);
-    calc->current_operator = 0;
-    calc->new_number = true;
 }
 
 // Clear calculator
@@ -268,7 +302,7 @@ void calculator_clear(calculator_t* calc) {
     calc->current_value = 0;
     calc->stored_value = 0;
     calc->current_operator = 0;
-    calc->new_number = true;
+    calc->new_number = 1;
 }
 
 // Handle backspace
@@ -281,4 +315,4 @@ void calculator_backspace(calculator_t* calc) {
             calc->display_pos = 1;
         }
     }
-} 
+}

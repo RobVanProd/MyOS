@@ -31,4 +31,9 @@ void terminal_write(const char* data, size_t size);
 void terminal_writestring(const char* data);
 void terminal_newline(void);
 
-#endif 
+// String conversion functions
+void int_to_string(int64_t value, char* str);
+void uint_to_string(uint64_t value, char* str);
+void int_to_hex_string(uint64_t value, char* str);
+
+#endif

@@ -1,296 +1,266 @@
 #include "rtl8139.h"
-#include "../../kernel/io.h"
-#include "../../kernel/memory.h"
+#include <io.h>
+#include <memory.h>
 #include <string.h>
 
 // RTL8139 driver instance
-static rtl8139_driver_t rtl8139_driver;
+static rtl8139_device_t rtl8139_driver;
 
 // Receive buffer
 static uint8_t* rx_buffer;
 static uint32_t rx_buffer_offset;
 
 // Transmit buffers
-static uint8_t* tx_buffers[4];
-static uint32_t tx_current;
+static uint8_t* tx_buffers[RTL8139_TX_BUF_COUNT];
+static uint32_t tx_current = 0;
 
 // Initialize RTL8139 device
-static int rtl8139_init_device(rtl8139_driver_t* driver) {
-    // Software reset
+static int rtl8139_init_device(rtl8139_device_t* driver) {
+    // Reset the device
     outb(driver->io_base + RTL8139_CMD, RTL8139_CMD_RESET);
-    while ((inb(driver->io_base + RTL8139_CMD) & RTL8139_CMD_RESET) != 0);
-    
+    while (inb(driver->io_base + RTL8139_CMD) & RTL8139_CMD_RESET);
+
     // Allocate receive buffer
-    rx_buffer = kmalloc_aligned(RTL8139_RX_BUFFER_SIZE + 16);
-    if (!rx_buffer) return DRIVER_ERROR_MEMORY;
-    rx_buffer_offset = 0;
-    
+    rx_buffer = kmalloc_aligned(RTL8139_RX_BUF_SIZE + RTL8139_RX_BUF_PAD);
+    if (!rx_buffer) return -1;
+
     // Allocate transmit buffers
-    for (int i = 0; i < RTL8139_NUM_TX_DESC; i++) {
-        tx_buffers[i] = kmalloc_aligned(RTL8139_TX_BUFFER_SIZE);
+    for (int i = 0; i < RTL8139_TX_BUF_COUNT; i++) {
+        tx_buffers[i] = kmalloc_aligned(RTL8139_TX_BUF_SIZE);
         if (!tx_buffers[i]) {
-            // Clean up on failure
+            // Free previously allocated buffers
             for (int j = 0; j < i; j++) {
                 kfree(tx_buffers[j]);
             }
             kfree(rx_buffer);
-            return DRIVER_ERROR_MEMORY;
+            return -1;
         }
     }
-    tx_current = 0;
-    
+
     // Set receive buffer address
     outl(driver->io_base + RTL8139_RBSTART, (uint32_t)rx_buffer);
-    
-    // Enable receive and transmit
-    outb(driver->io_base + RTL8139_CMD, RTL8139_CMD_RX_ENABLE | RTL8139_CMD_TX_ENABLE);
-    
+
+    // Enable transmitter and receiver
+    outb(driver->io_base + RTL8139_CMD, RTL8139_CMD_RX_EN | RTL8139_CMD_TX_EN);
+
+    // Set IMR
+    outw(driver->io_base + RTL8139_IMR, RTL8139_INT_ROK | RTL8139_INT_TOK);
+
     // Configure receive buffer
-    outl(driver->io_base + RTL8139_RCR, RTL8139_RCR_AAP |     // Accept all packets
-                                       RTL8139_RCR_APM |     // Accept physical match
-                                       RTL8139_RCR_AM |      // Accept multicast
-                                       RTL8139_RCR_AB |      // Accept broadcast
-                                       RTL8139_RCR_WRAP |    // Wrap around buffer
-                                       RTL8139_RCR_RBLEN_32K |
-                                       RTL8139_RCR_MXDMA_UNLIMITED);
-    
-    // Configure transmit
-    outl(driver->io_base + RTL8139_TCR, RTL8139_TCR_MXDMA_2048 |
-                                       RTL8139_TCR_IFG_STD);
-    
-    // Enable interrupts
-    outw(driver->io_base + RTL8139_IMR, RTL8139_ISR_ROK | RTL8139_ISR_TOK);
-    
-    // Read MAC address
-    for (int i = 0; i < 6; i++) {
-        driver->mac_addr[i] = inb(driver->io_base + RTL8139_IDR0 + i);
-    }
-    
-    return DRIVER_SUCCESS;
+    outl(driver->io_base + RTL8139_RCR,
+         RTL8139_RCR_APM |      // Accept physical match
+         RTL8139_RCR_AB |       // Accept broadcast
+         RTL8139_RCR_AM |       // Accept multicast
+         RTL8139_RCR_WRAP);     // Wrap around buffer
+
+    // Configure transmit settings
+    outl(driver->io_base + RTL8139_TCR,
+         RTL8139_TCR_MXDMA);    // Max DMA burst size
+
+    return 0;
 }
 
 // Initialize RTL8139 driver
 int rtl8139_init(driver_t* driver) {
-    rtl8139_driver_t* rtl = (rtl8139_driver_t*)driver;
-    
+    rtl8139_device_t* rtl = (rtl8139_device_t*)driver;
+    pci_device_t* pci_dev = NULL;
+
     // Find RTL8139 PCI device
-    pci_device_t* pci_dev = pci_get_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID);
-    if (!pci_dev) return DRIVER_ERROR_NOT_FOUND;
-    
+    if (hal_pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID, pci_dev) != 0) {
+        return -1;
+    }
+
     // Enable bus mastering
-    pci_enable_bus_mastering(pci_dev);
-    
+    hal_pci_enable_bus_mastering(pci_dev);
+
     // Get I/O base address
-    rtl->io_base = pci_get_bar_address(pci_dev, 0);
-    if (!rtl->io_base) return DRIVER_ERROR_IO;
-    
-    // Get IRQ line
-    rtl->irq = pci_get_interrupt_line(pci_dev);
-    
+    rtl->io_base = hal_pci_read_config(pci_dev, PCI_CONFIG_BAR0) & ~0x3;
+
     // Initialize device
     return rtl8139_init_device(rtl);
 }
 
 // Cleanup RTL8139 driver
 int rtl8139_cleanup(driver_t* driver) {
-    rtl8139_driver_t* rtl = (rtl8139_driver_t*)driver;
-    
-    // Disable receive and transmit
+    rtl8139_device_t* rtl = (rtl8139_device_t*)driver;
+
+    // Disable transmitter and receiver
     outb(rtl->io_base + RTL8139_CMD, 0);
-    
-    // Disable interrupts
-    outw(rtl->io_base + RTL8139_IMR, 0);
-    
-    // Free buffers
-    kfree(rx_buffer);
-    for (int i = 0; i < RTL8139_NUM_TX_DESC; i++) {
-        kfree(tx_buffers[i]);
+
+    // Free receive buffer
+    if (rx_buffer) {
+        kfree(rx_buffer);
+        rx_buffer = NULL;
     }
-    
-    return DRIVER_SUCCESS;
+
+    // Free transmit buffers
+    for (int i = 0; i < RTL8139_TX_BUF_COUNT; i++) {
+        if (tx_buffers[i]) {
+            kfree(tx_buffers[i]);
+            tx_buffers[i] = NULL;
+        }
+    }
+
+    return 0;
 }
 
 // Handle receive
-static void rtl8139_handle_receive(rtl8139_driver_t* driver) {
-    uint16_t status;
-    
-    while ((status = inb(driver->io_base + RTL8139_CMD)) & RTL8139_CMD_RX_ENABLE) {
-        if (status & RTL8139_CMD_RX_EMPTY) break;
-        
-        // Get packet header
-        rtl8139_header_t* header = (rtl8139_header_t*)(rx_buffer + rx_buffer_offset);
-        
-        // Check for errors
-        if (header->status & (RTL8139_RX_STATUS_FAE |
-                            RTL8139_RX_STATUS_CRC |
-                            RTL8139_RX_STATUS_RUNT |
-                            RTL8139_RX_STATUS_LONG)) {
-            driver->stats.rx_errors++;
-            continue;
+void rtl8139_handle_receive(rtl8139_device_t* driver) {
+    uint16_t rx_status;
+    uint16_t rx_size;
+    rtl8139_header_t* header;
+
+    while (!(inb(driver->io_base + RTL8139_CMD) & RTL8139_CMD_RX_EN)) {
+        header = (rtl8139_header_t*)(rx_buffer + rx_buffer_offset);
+        rx_status = header->status;
+        rx_size = header->size;
+
+        if (rx_status & RTL8139_INT_ROK) {
+            // Process received packet
+            // TODO: Forward packet to network stack
+
+            // Update buffer offset
+            rx_buffer_offset = (rx_buffer_offset + rx_size + sizeof(rtl8139_header_t) + 3) & ~3;
+            if (rx_buffer_offset >= RTL8139_RX_BUF_SIZE) {
+                rx_buffer_offset -= RTL8139_RX_BUF_SIZE;
+            }
+
+            // Update CAPR
+            outw(driver->io_base + RTL8139_CAPR, rx_buffer_offset - 16);
         }
-        
-        // Get packet size
-        uint16_t size = header->size - 4; // Subtract CRC
-        
-        // Update statistics
-        driver->stats.rx_packets++;
-        driver->stats.rx_bytes += size;
-        
-        // Move to next packet
-        rx_buffer_offset = (rx_buffer_offset + size + 4 + 3) & ~3;
-        if (rx_buffer_offset > RTL8139_RX_BUFFER_SIZE) {
-            rx_buffer_offset = 0;
-        }
-        
-        // Update CAPR
-        outw(driver->io_base + RTL8139_CAPR, rx_buffer_offset - 16);
     }
 }
 
 // Handle transmit
-static void rtl8139_handle_transmit(rtl8139_driver_t* driver) {
-    uint32_t status = inl(driver->io_base + RTL8139_TSD0 + (tx_current * 4));
-    
-    if (status & RTL8139_TX_STATUS_TOK) {
-        // Transmission successful
-        driver->stats.tx_packets++;
-        driver->stats.tx_bytes += (status >> 16) & 0x1FFF;
-    } else if (status & RTL8139_TX_STATUS_TUN) {
-        // Transmit FIFO underrun
-        driver->stats.tx_errors++;
+void rtl8139_handle_transmit(rtl8139_device_t* driver) {
+    uint32_t tx_status;
+
+    for (int i = 0; i < RTL8139_TX_BUF_COUNT; i++) {
+        tx_status = inl(driver->io_base + RTL8139_TSD0 + (i * 4));
+        if (tx_status & RTL8139_INT_TOK) {
+            // Packet transmitted successfully
+            // TODO: Notify network stack
+        }
     }
-    
-    // Move to next transmit buffer
-    tx_current = (tx_current + 1) % RTL8139_NUM_TX_DESC;
 }
 
 // Interrupt handler
-void rtl8139_handle_interrupt(rtl8139_driver_t* driver) {
+void rtl8139_handle_interrupt(rtl8139_device_t* driver) {
     uint16_t status = inw(driver->io_base + RTL8139_ISR);
-    
-    // Clear interrupts
-    outw(driver->io_base + RTL8139_ISR, status);
-    
-    // Handle receive
-    if (status & RTL8139_ISR_ROK) {
+
+    if (status & RTL8139_INT_ROK) {
         rtl8139_handle_receive(driver);
     }
-    
-    // Handle transmit
-    if (status & RTL8139_ISR_TOK) {
+
+    if (status & RTL8139_INT_TOK) {
         rtl8139_handle_transmit(driver);
     }
+
+    // Clear interrupts
+    outw(driver->io_base + RTL8139_ISR, status);
 }
 
 // Transmit packet
-int rtl8139_transmit_packet(rtl8139_driver_t* driver, const void* data, size_t length) {
-    if (length > RTL8139_TX_BUFFER_SIZE) {
-        return DRIVER_ERROR_INVALID;
+int rtl8139_transmit_packet(rtl8139_device_t* driver, const void* data, size_t length) {
+    if (length > RTL8139_TX_BUF_SIZE) {
+        return -1;
     }
-    
-    // Wait for transmit buffer to be available
-    uint32_t status;
-    do {
-        status = inl(driver->io_base + RTL8139_TSD0 + (tx_current * 4));
-    } while (!(status & RTL8139_TX_STATUS_OWN));
-    
+
+    // Wait for current buffer to be free
+    while (inl(driver->io_base + RTL8139_TSD0 + (tx_current * 4)) & 0x2000);
+
     // Copy data to transmit buffer
     memcpy(tx_buffers[tx_current], data, length);
-    
-    // Set up transmit
+
+    // Start transmission
     outl(driver->io_base + RTL8139_TSAD0 + (tx_current * 4), (uint32_t)tx_buffers[tx_current]);
     outl(driver->io_base + RTL8139_TSD0 + (tx_current * 4), length);
-    
-    return DRIVER_SUCCESS;
+
+    // Move to next buffer
+    tx_current = (tx_current + 1) % RTL8139_TX_BUF_COUNT;
+
+    return 0;
 }
 
 // Receive packet
-int rtl8139_receive_packet(rtl8139_driver_t* driver, void* buffer, size_t max_length) {
-    rtl8139_header_t* header = (rtl8139_header_t*)(rx_buffer + rx_buffer_offset);
-    
-    // Check if packet available
-    if (!(inb(driver->io_base + RTL8139_CMD) & RTL8139_CMD_RX_EMPTY)) {
-        return 0;
+int rtl8139_receive_packet(rtl8139_device_t* driver, void* buffer, size_t max_length) {
+    rtl8139_header_t* header;
+    uint16_t rx_status;
+    uint16_t rx_size;
+
+    if (!buffer || !max_length) {
+        return -1;
     }
-    
-    // Check for errors
-    if (header->status & (RTL8139_RX_STATUS_FAE |
-                         RTL8139_RX_STATUS_CRC |
-                         RTL8139_RX_STATUS_RUNT |
-                         RTL8139_RX_STATUS_LONG)) {
-        driver->stats.rx_errors++;
-        return DRIVER_ERROR_IO;
+
+    header = (rtl8139_header_t*)(rx_buffer + rx_buffer_offset);
+    rx_status = header->status;
+    rx_size = header->size;
+
+    if (!(rx_status & RTL8139_INT_ROK)) {
+        return 0;  // No packet available
     }
-    
-    // Get packet size
-    uint16_t size = header->size - 4; // Subtract CRC
-    if (size > max_length) {
-        return DRIVER_ERROR_INVALID;
+
+    if (rx_size > max_length) {
+        return -1;  // Buffer too small
     }
-    
-    // Copy data to buffer
-    memcpy(buffer, rx_buffer + rx_buffer_offset + sizeof(rtl8139_header_t), size);
-    
-    // Move to next packet
-    rx_buffer_offset = (rx_buffer_offset + size + 4 + 3) & ~3;
-    if (rx_buffer_offset > RTL8139_RX_BUFFER_SIZE) {
-        rx_buffer_offset = 0;
+
+    // Copy packet data
+    memcpy(buffer, rx_buffer + rx_buffer_offset + sizeof(rtl8139_header_t), rx_size);
+
+    // Update buffer offset
+    rx_buffer_offset = (rx_buffer_offset + rx_size + sizeof(rtl8139_header_t) + 3) & ~3;
+    if (rx_buffer_offset >= RTL8139_RX_BUF_SIZE) {
+        rx_buffer_offset -= RTL8139_RX_BUF_SIZE;
     }
-    
+
     // Update CAPR
     outw(driver->io_base + RTL8139_CAPR, rx_buffer_offset - 16);
-    
-    return size;
+
+    return rx_size;
 }
 
 // IOCTL operations
 int rtl8139_ioctl(driver_t* driver, uint32_t cmd, void* arg) {
-    rtl8139_driver_t* rtl = (rtl8139_driver_t*)driver;
-    
+    rtl8139_device_t* rtl = (rtl8139_device_t*)driver;
+
     switch (cmd) {
-        case IOCTL_RTL8139_GET_MAC:
-            if (!arg) return DRIVER_ERROR_INVALID;
-            memcpy(arg, rtl->mac_addr, 6);
-            return DRIVER_SUCCESS;
-            
-        case IOCTL_RTL8139_SET_PROMISCUOUS:
-            if (!arg) return DRIVER_ERROR_INVALID;
-            if (*(int*)arg) {
-                outl(rtl->io_base + RTL8139_RCR,
-                     inl(rtl->io_base + RTL8139_RCR) | RTL8139_RCR_AAP);
-            } else {
-                outl(rtl->io_base + RTL8139_RCR,
-                     inl(rtl->io_base + RTL8139_RCR) & ~RTL8139_RCR_AAP);
+        case NETWORK_IOCTL_GET_MAC: {
+            uint8_t* mac = (uint8_t*)arg;
+            for (int i = 0; i < 6; i++) {
+                mac[i] = inb(rtl->io_base + RTL8139_IDR0 + i);
             }
-            return DRIVER_SUCCESS;
-            
-        case IOCTL_RTL8139_GET_STATS:
-            if (!arg) return DRIVER_ERROR_INVALID;
-            memcpy(arg, &rtl->stats, sizeof(rtl8139_stats_t));
-            return DRIVER_SUCCESS;
-            
+            return 0;
+        }
+        case NETWORK_IOCTL_SET_MAC: {
+            uint8_t* mac = (uint8_t*)arg;
+            // Disable Rx and Tx before changing MAC
+            outb(rtl->io_base + RTL8139_CMD, 0);
+            for (int i = 0; i < 6; i++) {
+                outb(rtl->io_base + RTL8139_IDR0 + i, mac[i]);
+            }
+            // Re-enable Rx and Tx
+            outb(rtl->io_base + RTL8139_CMD, RTL8139_CMD_RX_EN | RTL8139_CMD_TX_EN);
+            return 0;
+        }
         default:
-            return DRIVER_ERROR_NOT_SUPPORTED;
+            return -1;
     }
 }
 
 // Create and register RTL8139 driver
 driver_t* create_rtl8139_driver(void) {
     // Initialize driver structure
-    memset(&rtl8139_driver, 0, sizeof(rtl8139_driver_t));
-    DRIVER_INIT(&rtl8139_driver.driver, "rtl8139", DRIVER_TYPE_NETWORK);
-    
-    // Set up driver operations
+    memcpy(rtl8139_driver.driver.name, "rtl8139", sizeof("rtl8139"));
+    rtl8139_driver.driver.type = DRIVER_TYPE_NETWORK;
     rtl8139_driver.driver.init = rtl8139_init;
     rtl8139_driver.driver.cleanup = rtl8139_cleanup;
-    rtl8139_driver.driver.read = rtl8139_receive_packet;
-    rtl8139_driver.driver.write = rtl8139_transmit_packet;
     rtl8139_driver.driver.ioctl = rtl8139_ioctl;
-    
-    // Register driver
-    if (driver_register(&rtl8139_driver.driver) != DRIVER_SUCCESS) {
-        return NULL;
-    }
+
+    // Initialize device-specific fields
+    rtl8139_driver.io_base = 0;
+    rtl8139_driver.rx_buffer = NULL;
+    rtl8139_driver.tx_current = 0;
+    rtl8139_driver.rx_current = 0;
     
     return &rtl8139_driver.driver;
-} 
+}

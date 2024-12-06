@@ -1,5 +1,6 @@
 #include "pci.h"
 #include "io.h"
+#include "terminal.h"
 #include <string.h>
 
 // PCI configuration addresses
@@ -79,7 +80,7 @@ void pci_scan_function(uint8_t bus, uint8_t device, uint8_t function) {
     if (pci_devices[num_pci_devices-1].class_code == PCI_CLASS_BRIDGE &&
         pci_devices[num_pci_devices-1].subclass == 0x04) {
         uint32_t secondary_bus = (pci_read_config(bus, device, function, 0x18) >> 8) & 0xFF;
-        pci_scan_bus(secondary_bus);
+        pci_scan_bus();
     }
 }
 
@@ -101,16 +102,16 @@ void pci_scan_device(uint8_t bus, uint8_t device) {
 }
 
 // Scan PCI bus
-void pci_scan_bus(uint8_t bus) {
-    for (int device = 0; device < PCI_MAX_DEVICES; device++) {
-        pci_scan_device(bus, device);
+void pci_scan_bus(void) {
+    for (uint8_t device = 0; device < PCI_MAX_DEVICES; device++) {
+        pci_scan_device(0, device);
     }
 }
 
 // Initialize PCI subsystem
 void pci_init(void) {
     num_pci_devices = 0;
-    pci_scan_bus(0);
+    pci_scan_bus();
 }
 
 // Find PCI device by vendor and device ID
@@ -227,21 +228,49 @@ const char* pci_vendor_string(uint16_t vendor_id) {
 
 // Dump PCI device information
 void pci_dump_device(pci_device_t* dev) {
-    printf("PCI Device Information:\n");
-    printf("  Vendor: %s (0x%04X)\n", pci_vendor_string(dev->vendor_id), dev->vendor_id);
-    printf("  Device ID: 0x%04X\n", dev->device_id);
-    printf("  Class: %s (0x%02X)\n", pci_class_string(dev->class_code), dev->class_code);
-    printf("  Subclass: 0x%02X\n", dev->subclass);
-    printf("  Prog IF: 0x%02X\n", dev->prog_if);
-    printf("  Revision: 0x%02X\n", dev->revision);
-    printf("  IRQ Line: %d\n", dev->interrupt_line);
-    printf("  IRQ Pin: %d\n", dev->interrupt_pin);
+    if (!dev) return;
     
-    for (int i = 0; i < 6; i++) {
-        if (dev->bar[i]) {
-            printf("  BAR%d: 0x%08X (Size: %d bytes)\n", i, 
-                   pci_get_bar_address(dev, i),
-                   pci_get_bar_size(dev, i));
-        }
-    }
-} 
+    terminal_writestring("PCI Device Information:\n");
+    
+    terminal_writestring("  Vendor ID: 0x");
+    char temp[32];
+    int_to_hex_string(dev->vendor_id, temp);
+    terminal_writestring(temp);
+    terminal_writestring(" (");
+    terminal_writestring(pci_vendor_string(dev->vendor_id));
+    terminal_writestring(")\n");
+    
+    terminal_writestring("  Device ID: 0x");
+    int_to_hex_string(dev->device_id, temp);
+    terminal_writestring(temp);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Class: ");
+    terminal_writestring(pci_class_string(dev->class_code));
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Subclass: 0x");
+    int_to_hex_string(dev->subclass, temp);
+    terminal_writestring(temp);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Prog IF: 0x");
+    int_to_hex_string(dev->prog_if, temp);
+    terminal_writestring(temp);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Revision: 0x");
+    int_to_hex_string(dev->revision, temp);
+    terminal_writestring(temp);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Command: 0x");
+    int_to_hex_string(dev->command, temp);
+    terminal_writestring(temp);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Status: 0x");
+    int_to_hex_string(dev->status, temp);
+    terminal_writestring(temp);
+    terminal_writestring("\n");
+}

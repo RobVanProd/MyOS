@@ -1,5 +1,6 @@
 #include "sound.h"
 #include "memory.h"
+#include "string.h"
 
 // Sound globals
 static sound_device_t* current_device = NULL;
@@ -271,4 +272,4 @@ uint32_t sound_get_frame_size(uint8_t format, uint8_t channels) {
     }
     
     return sample_size * channels;
-} 
+}

@@ -2,6 +2,7 @@
 #define PROCESS_H
 
 #include <stdint.h>
+#include <string.h>
 #include "memory.h"
 
 // Process states
@@ -21,6 +22,11 @@
 // Process flags
 #define PROCESS_FLAG_KERNEL     0x01
 #define PROCESS_FLAG_USER       0x02
+
+// Page flags
+#define PAGE_PRESENT    0x001
+#define PAGE_WRITE     0x002
+#define PAGE_USER      0x004
 
 // Process context structure
 typedef struct {
@@ -48,6 +54,12 @@ typedef struct process {
     uint32_t heap_size;            // Size of process heap
     struct process* next;           // Next process in queue
 } process_t;
+
+// Memory management functions
+void* get_kernel_page_directory(void);
+void* create_page_directory(void);
+void free_page_directory(void* page_dir);
+uint32_t allocate_region(void* page_dir, uint32_t start, uint32_t size, uint32_t flags);
 
 // Process management functions
 void process_init(void);
@@ -78,4 +90,4 @@ int sys_wait(int* status);
 int sys_getpid(void);
 int sys_kill(int pid, int sig);
 
-#endif 
+#endif

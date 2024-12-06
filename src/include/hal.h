@@ -2,6 +2,7 @@
 #define HAL_H
 
 #include <stdint.h>
+#include <pci.h>
 
 // Hardware Abstraction Layer Interface
 
@@ -12,12 +13,21 @@ void hal_cpu_disable_interrupts(void);
 uint32_t hal_cpu_get_vendor(void);
 void hal_cpu_get_info(char* vendor, uint32_t* family, uint32_t* model);
 
+// Memory Management Constants
+#define PAGE_SIZE 4096
+
 // Memory Management
 void hal_mem_init(void);
 void* hal_mem_alloc_page(void);
 void hal_mem_free_page(void* page);
 uint32_t hal_mem_get_total(void);
 uint32_t hal_mem_get_free(void);
+
+// IDT Management
+void idt_set_gate(uint8_t vector, uint32_t handler, uint16_t selector, uint8_t flags);
+
+// Memory Management Functions
+void* kmalloc_aligned(size_t size);
 
 // Interrupt Management
 typedef void (*interrupt_handler_t)(void);
@@ -61,16 +71,6 @@ power_state_t hal_power_get_state(void);
 uint32_t hal_power_get_battery_level(void);
 
 // PCI Management
-typedef struct {
-    uint16_t vendor_id;
-    uint16_t device_id;
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
-    uint8_t revision;
-    uint32_t bar[6];
-} pci_device_t;
-
 void hal_pci_init(void);
 int hal_pci_find_device(uint16_t vendor, uint16_t device, pci_device_t* dev);
 void hal_pci_enable_bus_mastering(pci_device_t* dev);
@@ -153,4 +153,4 @@ typedef struct {
 
 void hal_get_system_info(system_info_t* info);
 
-#endif 
+#endif

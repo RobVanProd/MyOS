@@ -1,13 +1,15 @@
-#include "graphics.h"
-#include "keyboard.h"
-#include "memory.h"
-#include "process.h"
-#include "fs.h"
-#include "mouse.h"
-#include "network.h"
-#include "sound.h"
-#include "../apps/notepad.h"
-#include "../apps/calculator.h"
+#include <graphics.h>
+#include <keyboard.h>
+#include <memory.h>
+#include <process.h>
+#include <fs.h>
+#include <mouse.h>
+#include <network.h>
+#include <sound.h>
+#include <apps/notepad.h>
+#include <apps/calculator.h>
+#include <stdbool.h>
+#include <string.h>
 
 // Global variables for GUI state
 static int mouse_x = 160;
@@ -93,8 +95,8 @@ void kernel_main(void) {
         swap_buffers();
         
         // Handle keyboard input
-        char key = keyboard_get_key();
-        if (key) {
+        if (keyboard_haskey()) {
+            char key = keyboard_getchar();
             handle_window_key(key);
         }
         
@@ -104,4 +106,4 @@ void kernel_main(void) {
         // Run scheduler
         scheduler_tick();
     }
-} 
+}

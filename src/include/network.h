@@ -24,6 +24,19 @@
 // MAC address length
 #define MAC_ADDR_LEN 6
 
+// Network IOCTL commands
+#define NETWORK_IOCTL_GET_MAC       0x1001
+#define NETWORK_IOCTL_SET_MAC       0x1002
+#define NETWORK_IOCTL_GET_IP        0x1003
+#define NETWORK_IOCTL_SET_IP        0x1004
+#define NETWORK_IOCTL_GET_NETMASK   0x1005
+#define NETWORK_IOCTL_SET_NETMASK   0x1006
+#define NETWORK_IOCTL_GET_GATEWAY   0x1007
+#define NETWORK_IOCTL_SET_GATEWAY   0x1008
+#define NETWORK_IOCTL_SET_FLAGS     0x1009
+#define NETWORK_IOCTL_GET_FLAGS     0x100A
+#define NETWORK_IOCTL_GET_STATS     0x100B
+
 // Network structures
 typedef struct {
     uint8_t mac[MAC_ADDR_LEN];
@@ -128,4 +141,4 @@ uint16_t ntohs(uint16_t value);
 uint32_t htonl(uint32_t value);
 uint32_t ntohl(uint32_t value);
 
-#endif 
+#endif

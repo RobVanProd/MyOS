@@ -1,7 +1,16 @@
 #ifndef ATA_H
 #define ATA_H
 
-#include "../../kernel/driver.h"
+#include <driver.h>
+
+// ATA ports
+#define ATA_PRIMARY_BASE        0x1F0
+#define ATA_PRIMARY_CONTROL     0x3F6
+#define ATA_SECONDARY_BASE      0x170
+#define ATA_SECONDARY_CONTROL   0x376
+
+// Maximum number of ATA devices
+#define ATA_MAX_DEVICES         4
 
 // ATA registers
 #define ATA_REG_DATA        0x00
@@ -116,4 +125,4 @@ void ata_soft_reset(ata_device_t* device);
 #define IOCTL_ATA_FLUSH_CACHE         0x1004
 #define IOCTL_ATA_SELECT_DEVICE       0x1005
 
-#endif 
+#endif // ATA_H

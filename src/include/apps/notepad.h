@@ -1,17 +1,17 @@
 #ifndef NOTEPAD_H
 #define NOTEPAD_H
 
-#include <window.h>
+#include <graphics.h>
 
-// Maximum text size for notepad
 #define NOTEPAD_MAX_TEXT 4096
+#define NOTEPAD_LINE_HEIGHT 16
+#define NOTEPAD_PADDING 4
 
-// Notepad structure
 typedef struct {
-    window_t* window;       // Window handle
-    char text[NOTEPAD_MAX_TEXT];  // Text buffer
-    int cursor_pos;        // Current cursor position
-    int scroll_y;          // Vertical scroll position
+    char text[NOTEPAD_MAX_TEXT];
+    int cursor_pos;
+    int scroll_y;
+    window_t* window;
 } notepad_t;
 
 // Notepad functions

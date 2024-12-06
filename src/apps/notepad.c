@@ -1,6 +1,7 @@
 #include "notepad.h"
-#include "../kernel/memory.h"
-#include "../kernel/graphics.h"
+#include <memory.h>
+#include <graphics.h>
+#include <string.h>
 
 notepad_t* create_notepad(int x, int y) {
     notepad_t* notepad = kmalloc(sizeof(notepad_t));
@@ -35,7 +36,7 @@ void destroy_notepad(notepad_t* notepad) {
 }
 
 void notepad_handle_key(window_t* window, char key) {
-    notepad_t* notepad = (notepad_t*)window;
+    notepad_t* notepad = (notepad_t*)window->data;
     
     // Handle backspace
     if (key == '\b') {
@@ -50,78 +51,93 @@ void notepad_handle_key(window_t* window, char key) {
     // Handle regular characters
     else if (key >= 32 && key < 127) {
         if (notepad->cursor_pos < NOTEPAD_MAX_TEXT - 1) {
-            // Shift text right
+            // Shift characters right
             int i;
             for (i = NOTEPAD_MAX_TEXT - 2; i >= notepad->cursor_pos; i--) {
                 notepad->text[i + 1] = notepad->text[i];
             }
             // Insert new character
-            notepad->text[notepad->cursor_pos] = key;
-            notepad->cursor_pos++;
+            notepad->text[notepad->cursor_pos++] = key;
         }
     }
+    
+    // Request redraw
+    window_invalidate(window);
 }
 
 void notepad_handle_click(window_t* window, int x, int y) {
-    notepad_t* notepad = (notepad_t*)window;
+    notepad_t* notepad = (notepad_t*)window->data;
     
-    // Calculate cursor position from click coordinates
-    int text_y = y - NOTEPAD_PADDING - 16; // Subtract title bar height
-    int text_x = x - NOTEPAD_PADDING;
+    // Convert click coordinates to character position
+    int char_width = 8;  // Assuming fixed-width font
+    int char_height = 16;
     
-    if (text_y >= 0) {
-        int line = text_y / NOTEPAD_LINE_HEIGHT;
-        int col = text_x / 8; // Assuming 8 pixel wide font
-        
-        // Find the actual position in text
-        int pos = 0;
-        int current_line = 0;
-        
-        while (notepad->text[pos] && current_line < line) {
-            if (notepad->text[pos] == '\n') current_line++;
-            pos++;
+    // Calculate character position from click coordinates
+    int click_x = (x - 5) / char_width;  // 5 pixel margin
+    int click_y = (y - 25 + notepad->scroll_y) / char_height;  // 25 pixel title bar
+    
+    // Find closest character position
+    int pos = 0;
+    int current_x = 0;
+    int current_y = 0;
+    
+    for (pos = 0; notepad->text[pos]; pos++) {
+        if (current_y == click_y && current_x == click_x) {
+            break;
         }
         
-        // Add column offset
-        pos += col;
-        
-        // Clamp cursor position
-        if (pos < 0) pos = 0;
-        if (pos > strlen(notepad->text)) pos = strlen(notepad->text);
-        
-        notepad->cursor_pos = pos;
+        if (notepad->text[pos] == '\n') {
+            current_y++;
+            current_x = 0;
+        } else {
+            current_x++;
+            if (current_x >= (window->width - 10) / char_width) {
+                current_y++;
+                current_x = 0;
+            }
+        }
     }
+    
+    notepad->cursor_pos = pos;
+    window_invalidate(window);
 }
 
 void notepad_draw(window_t* window) {
-    notepad_t* notepad = (notepad_t*)window;
-    int x = NOTEPAD_PADDING;
-    int y = NOTEPAD_PADDING + 16; // Start below title bar
-    int line_start = 0;
-    int i;
+    notepad_t* notepad = (notepad_t*)window->data;
+    
+    // Clear window
+    draw_rect(window->x, window->y + 25, window->width, window->height - 25, COLOR_WINDOW_BG);
     
     // Draw text
-    for (i = 0; notepad->text[i]; i++) {
-        if (notepad->text[i] == '\n' || x >= window->width - NOTEPAD_PADDING) {
-            x = NOTEPAD_PADDING;
-            y += NOTEPAD_LINE_HEIGHT;
-            if (notepad->text[i] == '\n') {
-                line_start = i + 1;
-                continue;
-            }
+    int x = window->x + 5;
+    int y = window->y + 25 - notepad->scroll_y;
+    int char_width = 8;
+    int char_height = 16;
+    
+    for (int i = 0; notepad->text[i]; i++) {
+        if (notepad->text[i] == '\n') {
+            x = window->x + 5;
+            y += char_height;
+            continue;
         }
         
-        draw_char(window->x + x, window->y + y, notepad->text[i], COLOR_TEXT);
-        x += 8; // Assuming 8 pixel wide font
+        if (x + char_width > window->x + window->width - 5) {
+            x = window->x + 5;
+            y += char_height;
+        }
+        
+        draw_char(x, y, notepad->text[i], 0x000000);
         
         // Draw cursor
         if (i == notepad->cursor_pos) {
-            draw_rect(window->x + x - 8, window->y + y, 2, NOTEPAD_LINE_HEIGHT, COLOR_TEXT);
+            draw_rect(x, y, 2, char_height, 0x000000);
         }
+        
+        x += char_width;
     }
     
-    // Draw cursor at end of text if needed
-    if (i == notepad->cursor_pos) {
-        draw_rect(window->x + x, window->y + y, 2, NOTEPAD_LINE_HEIGHT, COLOR_TEXT);
+    // Draw cursor at end if needed
+    if (notepad->cursor_pos >= 0 && (size_t)notepad->cursor_pos == strlen(notepad->text)) {
+        draw_rect(x, y, 2, char_height, 0x000000);
     }
-} 
+}

@@ -1,5 +1,6 @@
 #include "driver.h"
 #include "memory.h"
+#include "terminal.h"
 #include <string.h>
 
 // Global driver list
@@ -156,34 +157,112 @@ int driver_cleanup_all(void) {
 void driver_dump_info(driver_t* driver) {
     if (!driver) return;
     
-    printf("Driver Information:\n");
-    printf("  Name: %s\n", driver->name);
-    printf("  Description: %s\n", driver->description);
-    printf("  Version: %d.%d\n", driver->version >> 8, driver->version & 0xFF);
-    printf("  Type: %s\n", driver_type_string(driver->type));
-    printf("  Flags: 0x%08x\n", driver->flags);
+    terminal_writestring("Driver Information:\n");
+    terminal_writestring("  Name: ");
+    terminal_writestring(driver->name);
+    terminal_writestring("\n");
+    terminal_writestring("  Description: ");
+    terminal_writestring(driver->description);
+    terminal_writestring("\n");
     
-    printf("  Capabilities:\n");
-    printf("    Max Transfer: %d bytes\n", driver->caps.max_transfer_size);
-    printf("    Buffer Alignment: %d bytes\n", driver->caps.buffer_alignment);
-    printf("    DMA Support: %s\n", driver->caps.dma_support ? "Yes" : "No");
-    printf("    Interrupt Support: %s\n", driver->caps.interrupt_support ? "Yes" : "No");
+    char version[32];
+    int_to_string(driver->version >> 8, version);
+    terminal_writestring("  Version: ");
+    terminal_writestring(version);
+    terminal_writestring(".");
+    int_to_string(driver->version & 0xFF, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
     
-    printf("  Statistics:\n");
-    printf("    Bytes Read: %llu\n", driver->stats.bytes_read);
-    printf("    Bytes Written: %llu\n", driver->stats.bytes_written);
-    printf("    I/O Errors: %d\n", driver->stats.io_errors);
-    printf("    Interrupts: %d\n", driver->stats.interrupts);
-    printf("    DMA Transfers: %d\n", driver->stats.dma_transfers);
-    printf("    Uptime: %llu seconds\n", driver->stats.uptime);
+    terminal_writestring("  Type: ");
+    terminal_writestring(driver_type_string(driver->type));
+    terminal_writestring("\n");
     
-    printf("  Configuration:\n");
-    printf("    I/O Base: 0x%08x\n", driver->config.io_base);
-    printf("    I/O Size: %d bytes\n", driver->config.io_size);
-    printf("    Memory Base: 0x%08x\n", driver->config.mem_base);
-    printf("    Memory Size: %d bytes\n", driver->config.mem_size);
-    printf("    IRQ: %d\n", driver->config.irq);
-    printf("    DMA Channel: %d\n", driver->config.dma_channel);
+    terminal_writestring("  Flags: 0x");
+    int_to_hex_string(driver->flags, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Capabilities:\n");
+    terminal_writestring("    Max Transfer: ");
+    int_to_string(driver->caps.max_transfer_size, version);
+    terminal_writestring(version);
+    terminal_writestring(" bytes\n");
+    
+    terminal_writestring("    Buffer Alignment: ");
+    int_to_string(driver->caps.buffer_alignment, version);
+    terminal_writestring(version);
+    terminal_writestring(" bytes\n");
+    
+    terminal_writestring("    DMA Support: ");
+    terminal_writestring(driver->caps.dma_support ? "Yes" : "No");
+    terminal_writestring("\n");
+    
+    terminal_writestring("    Interrupt Support: ");
+    terminal_writestring(driver->caps.interrupt_support ? "Yes" : "No");
+    terminal_writestring("\n");
+    
+    terminal_writestring("  Statistics:\n");
+    terminal_writestring("    Bytes Read: ");
+    int_to_string(driver->stats.bytes_read, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    Bytes Written: ");
+    int_to_string(driver->stats.bytes_written, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    I/O Errors: ");
+    int_to_string(driver->stats.io_errors, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    Interrupts: ");
+    int_to_string(driver->stats.interrupts, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    DMA Transfers: ");
+    int_to_string(driver->stats.dma_transfers, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    Uptime: ");
+    int_to_string(driver->stats.uptime, version);
+    terminal_writestring(version);
+    terminal_writestring(" seconds\n");
+    
+    terminal_writestring("  Configuration:\n");
+    terminal_writestring("    I/O Base: 0x");
+    int_to_hex_string(driver->config.io_base, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    I/O Size: ");
+    int_to_string(driver->config.io_size, version);
+    terminal_writestring(version);
+    terminal_writestring(" bytes\n");
+    
+    terminal_writestring("    Memory Base: 0x");
+    int_to_hex_string(driver->config.mem_base, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    Memory Size: ");
+    int_to_string(driver->config.mem_size, version);
+    terminal_writestring(version);
+    terminal_writestring(" bytes\n");
+    
+    terminal_writestring("    IRQ: ");
+    int_to_string(driver->config.irq, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
+    
+    terminal_writestring("    DMA Channel: ");
+    int_to_string(driver->config.dma_channel, version);
+    terminal_writestring(version);
+    terminal_writestring("\n");
 }
 
 // Get driver type string
@@ -222,4 +301,4 @@ const char* driver_error_string(int error) {
         default:
             return "Unknown error";
     }
-} 
+}

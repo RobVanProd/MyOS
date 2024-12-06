@@ -86,4 +86,84 @@ void terminal_write(const char* data, size_t size) {
 void terminal_writestring(const char* data) {
     for (size_t i = 0; data[i] != '\0'; i++)
         terminal_putchar(data[i]);
-} 
+}
+
+// Convert integer to string
+void int_to_string(int64_t value, char* str) {
+    if (value == 0) {
+        str[0] = '0';
+        str[1] = '\0';
+        return;
+    }
+
+    char temp[32];
+    int i = 0;
+    int is_negative = 0;
+
+    if (value < 0) {
+        is_negative = 1;
+        value = -value;
+    }
+
+    while (value > 0) {
+        temp[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+
+    int j = 0;
+    if (is_negative) {
+        str[j++] = '-';
+    }
+
+    while (--i >= 0) {
+        str[j++] = temp[i];
+    }
+    str[j] = '\0';
+}
+
+// Convert unsigned integer to string
+void uint_to_string(uint64_t value, char* str) {
+    if (value == 0) {
+        str[0] = '0';
+        str[1] = '\0';
+        return;
+    }
+
+    char temp[32];
+    int i = 0;
+
+    while (value > 0) {
+        temp[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+
+    int j = 0;
+    while (--i >= 0) {
+        str[j++] = temp[i];
+    }
+    str[j] = '\0';
+}
+
+// Convert integer to hexadecimal string
+void int_to_hex_string(uint64_t value, char* str) {
+    if (value == 0) {
+        str[0] = '0';
+        str[1] = '\0';
+        return;
+    }
+
+    char temp[32];
+    int i = 0;
+    const char hex_digits[] = "0123456789ABCDEF";
+
+    while (value > 0) {
+        temp[i++] = hex_digits[value & 0xF];
+        value >>= 4;
+    }
+
+    int j = 0;
+    while (--i >= 0) {
+        str[j++] = temp[i];
+    }
+    str[j] = '\0';
+}

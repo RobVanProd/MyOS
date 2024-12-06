@@ -1,7 +1,7 @@
 #include "netstack.h"
-#include "../memory.h"
+#include "memory.h"
+#include "terminal.h"
 #include <string.h>
-#include <stdio.h>
 
 // Network interface list
 static net_interface_t* interfaces = NULL;
@@ -142,6 +142,8 @@ void netstack_handle_ipv4(const void* data, size_t length) {
 
 // Handle ARP packet
 void netstack_handle_arp(const void* data, size_t length) {
+    (void)data;   // Suppress unused parameter warning
+    (void)length; // Suppress unused parameter warning
     // TODO: Implement ARP handling
 }
 
@@ -165,7 +167,6 @@ void netstack_handle_tcp(const void* data, size_t length) {
     if (length < sizeof(tcp_header_t)) return;
     
     const tcp_header_t* tcp = (const tcp_header_t*)data;
-    uint16_t src_port = ntohs(tcp->src_port);
     uint16_t dest_port = ntohs(tcp->dest_port);
     
     // Find matching socket
@@ -174,7 +175,7 @@ void netstack_handle_tcp(const void* data, size_t length) {
         if (socket->protocol == IP_PROTO_TCP &&
             socket->local_port == dest_port &&
             (socket->state == SOCKET_LISTENING ||
-             (socket->remote_port == src_port))) {
+             (socket->remote_port == dest_port))) {
             // Handle TCP packet for socket
             // TODO: Implement TCP state machine
             break;
@@ -188,7 +189,6 @@ void netstack_handle_udp(const void* data, size_t length) {
     if (length < sizeof(udp_header_t)) return;
     
     const udp_header_t* udp = (const udp_header_t*)data;
-    uint16_t src_port = ntohs(udp->src_port);
     uint16_t dest_port = ntohs(udp->dest_port);
     
     // Find matching socket
@@ -357,15 +357,28 @@ int netstack_socket_receive(socket_t* socket, void* buffer, size_t max_length) {
 
 // Format MAC address string
 void netstack_format_mac(char* buffer, const uint8_t* mac) {
-    sprintf(buffer, "%02x:%02x:%02x:%02x:%02x:%02x",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    char temp[8];
+    for (int i = 0; i < 6; i++) {
+        int_to_hex_string(mac[i], temp);
+        if (i > 0) {
+            buffer[i*3-1] = ':';
+        }
+        buffer[i*3] = temp[0];
+        buffer[i*3+1] = temp[1];
+    }
+    buffer[17] = '\0';
 }
 
 // Format IP address string
 void netstack_format_ip(char* buffer, uint32_t ip) {
-    sprintf(buffer, "%d.%d.%d.%d",
-            (ip >> 24) & 0xFF,
-            (ip >> 16) & 0xFF,
-            (ip >> 8) & 0xFF,
-            ip & 0xFF);
-} 
+    int_to_string((ip >> 24) & 0xFF, buffer);
+    int len = strlen(buffer);
+    buffer[len] = '.';
+    int_to_string((ip >> 16) & 0xFF, buffer + len + 1);
+    len = strlen(buffer);
+    buffer[len] = '.';
+    int_to_string((ip >> 8) & 0xFF, buffer + len + 1);
+    len = strlen(buffer);
+    buffer[len] = '.';
+    int_to_string(ip & 0xFF, buffer + len + 1);
+}
