@@ -84,6 +84,20 @@ A feature-rich operating system built from scratch, focusing on modern functiona
   - Sound mixing capabilities
   - Callback system for audio events
 
+## Documentation
+
+### Core System Documentation
+- [System Architecture](docs/core/system.md) - Overall system design and component interactions
+- [Memory Management](docs/core/memory.md) - Memory allocation, virtual memory, and protection mechanisms
+- [Process Management](docs/core/process.md) - Process scheduling, IPC, and synchronization primitives
+
+### API Reference
+- [Command System](docs/api/command.md) - Command registration and execution API
+- [System Calls](docs/api/syscalls.md) - Available system calls and their usage
+
+### User Guides
+- [Shell Interface](docs/user/shell.md) - Using the command-line interface and built-in commands
+
 ## Building and Running
 
 ### Prerequisites
@@ -134,14 +148,11 @@ src/
 ```
 
 ## Recent Updates
-- Added complete network stack with TCP/IP support
-- Implemented sound system with multiple format support
-- Added calculator application with modern UI
-- Enhanced file system with inode-based architecture
-- Added process management with multi-tasking support
-- Improved graphics system with double buffering
-- Added mouse support with event system
-- Updated kernel to support all new features
+- Added comprehensive command system with extensible architecture
+- Implemented shell application with command history and line editing
+- Created detailed system documentation and API references
+- Enhanced memory management with improved error handling
+- Added process management with priority-based scheduling
 
 ## Contributing
 Contributions are welcome! Please read our contributing guidelines before submitting pull requests.
