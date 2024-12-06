@@ -54,12 +54,14 @@ void keyboard_init(void) {
     }
 }
 
-void keyboard_handler(void) {
-    uint8_t scancode = inb(KEYBOARD_DATA_PORT);
-    char ascii = 0;
+void keyboard_handler(registers_t* regs) {
+    uint8_t scancode = keyboard_read_data();
 
-    // Handle special keys
     switch(scancode) {
+        case KEY_CAPSLOCK:
+            // Handle caps lock
+            caps_lock = !caps_lock;
+            break;
         case KEY_LSHIFT:
         case KEY_RSHIFT:
             shift_pressed = 1;
@@ -68,12 +70,10 @@ void keyboard_handler(void) {
         case KEY_RSHIFT | 0x80:
             shift_pressed = 0;
             break;
-        case KEY_CAPSLOCK:
-            caps_lock = !caps_lock;
-            break;
         default:
             // Convert scancode to ASCII if it's a press (not a release)
             if (!(scancode & 0x80) && scancode < sizeof(scancode_to_ascii)) {
+                char ascii;
                 if (shift_pressed) {
                     ascii = scancode_to_ascii_shift[scancode];
                 } else {
@@ -109,4 +109,4 @@ char keyboard_getchar(void) {
 
 int keyboard_haskey(void) {
     return buffer_start != buffer_end;
-} 
+}

@@ -29,6 +29,7 @@ cross-compiler/
 # Downloaded installers
 mingw-get-setup.exe
 msys2-installer.exe
+i686-elf-tools.zip
 
 # OS specific files
 .DS_Store

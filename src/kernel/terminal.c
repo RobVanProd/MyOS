@@ -32,6 +32,17 @@ void terminal_initialize(void) {
     }
 }
 
+void terminal_setcolor(uint8_t color) {
+    terminal_color = color;
+    for (size_t y = 0; y < VGA_HEIGHT; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            const size_t index = y * VGA_WIDTH + x;
+            const uint8_t uc = (uint8_t) (terminal_buffer[index] & 0xFF);
+            terminal_buffer[index] = vga_entry(uc, color);
+        }
+    }
+}
+
 void terminal_scroll(void) {
     // Move all lines up by one
     for (size_t y = 1; y < VGA_HEIGHT; y++) {
@@ -47,10 +58,6 @@ void terminal_scroll(void) {
         const size_t index = (VGA_HEIGHT - 1) * VGA_WIDTH + x;
         terminal_buffer[index] = vga_entry(' ', terminal_color);
     }
-}
-
-void terminal_setcolor(uint8_t color) {
-    terminal_color = color;
 }
 
 void terminal_putentryat(char c, uint8_t color, size_t x, size_t y) {
@@ -86,6 +93,21 @@ void terminal_write(const char* data, size_t size) {
 void terminal_writestring(const char* data) {
     for (size_t i = 0; data[i] != '\0'; i++)
         terminal_putchar(data[i]);
+}
+
+void terminal_writehex(uint32_t value) {
+    char hex_str[11];  // "0x" + 8 hex digits + null terminator
+    hex_str[0] = '0';
+    hex_str[1] = 'x';
+    hex_str[10] = '\0';
+
+    // Convert each nibble to hex
+    for (int i = 0; i < 8; i++) {
+        int nibble = (value >> ((7 - i) * 4)) & 0xF;
+        hex_str[i + 2] = nibble < 10 ? '0' + nibble : 'A' + (nibble - 10);
+    }
+
+    terminal_writestring(hex_str);
 }
 
 // Convert integer to string

@@ -7,7 +7,7 @@ static struct gdt_entry gdt[GDT_ENTRIES];
 static struct gdt_ptr gp;
 
 // Set up a GDT entry
-static void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
+void gdt_set_gate(int32_t num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
     gdt[num].base_low = (base & 0xFFFF);
     gdt[num].base_middle = (base >> 16) & 0xFF;
     gdt[num].base_high = (base >> 24) & 0xFF;
@@ -40,4 +40,4 @@ void gdt_init(void) {
 
     // Flush the GDT
     gdt_flush((uint32_t)&gp);
-} 
+}

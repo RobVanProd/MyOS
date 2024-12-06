@@ -51,42 +51,68 @@ size_t get_total_memory(void) {
 }
 
 size_t get_free_memory(void) {
-    return free_pages * 4096;
+    return free_pages * 4096;  // Each page is 4KB
 }
 
 size_t get_used_memory(void) {
-    return get_total_memory() - get_free_memory();
+    return (total_pages - free_pages) * 4096;
 }
 
 void* krealloc(void* ptr, size_t size) {
-    if (!ptr) {
+    if (ptr == NULL) {
+        // If ptr is NULL, act like malloc
         return kmalloc(size);
     }
-    
-    void* new_ptr = kmalloc(size);
-    if (!new_ptr) {
+    if (size == 0) {
+        // If size is 0, act like free
+        kfree(ptr);
         return NULL;
     }
     
+    // Allocate new block
+    void* new_ptr = kmalloc(size);
+    if (new_ptr == NULL) {
+        return NULL;
+    }
+    
+    // Copy old data to new block
     memcpy(new_ptr, ptr, size);
+    
+    // Free old block
     kfree(ptr);
+    
     return new_ptr;
 }
 
 // Memory mapping
 void* mmap(void* addr, uint32_t length, int prot, int flags, int fd, uint32_t offset) {
-    // Simple implementation - just allocate memory
-    (void)addr;    // Unused
-    (void)prot;    // Unused
-    (void)flags;   // Unused
-    (void)fd;      // Unused
-    (void)offset;  // Unused
-    
-    return kmalloc(length);
+    // Unused parameters
+    (void)addr;
+    (void)prot;
+    (void)flags;
+    (void)fd;
+    (void)offset;
+
+    // Simple implementation - just allocate pages
+    uint32_t num_pages = (length + 4095) / 4096;  // Round up to nearest page
+    for (uint32_t i = 0; i < num_pages; i++) {
+        void* page = alloc_page();
+        if (page == NULL) {
+            // Handle allocation failure
+            return NULL;
+        }
+    }
+    return (void*)1;  // Return non-NULL on success
 }
 
 int munmap(void* addr, size_t length) {
-    (void)addr;
-    (void)length;
-    return 0;  // Always succeed for now
+    // Simple implementation - just free pages
+    uint32_t num_pages = (length + 4095) / 4096;  // Round up to nearest page
+    uint32_t start_page = (uint32_t)addr / 4096;
+    
+    for (uint32_t i = 0; i < num_pages; i++) {
+        free_page((void*)((start_page + i) * 4096));
+    }
+    
+    return 0;
 }

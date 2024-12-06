@@ -1,6 +1,7 @@
 #include "sound.h"
 #include "memory.h"
 #include "string.h"
+#include "kheap.h"
 
 // Sound globals
 static sound_device_t* current_device = NULL;
@@ -14,7 +15,6 @@ void sound_init(void) {
         buffers[i].state = BUFFER_STATE_FREE;
         buffers[i].data = NULL;
         buffers[i].callback = NULL;
-        buffers[i].user_data = NULL;
         buffer_volumes[i] = 255;
     }
 }
@@ -43,7 +43,7 @@ int sound_device_unregister(sound_device_t* device) {
 }
 
 // Create a sound buffer
-int sound_buffer_create(uint8_t format, uint8_t channels, uint32_t sample_rate, uint32_t size) {
+int sound_buffer_create(uint32_t size, uint8_t format, uint8_t channels, uint32_t sample_rate) {
     // Find free buffer
     int buffer_id = -1;
     for (int i = 0; i < MAX_SOUND_BUFFERS; i++) {
@@ -52,92 +52,93 @@ int sound_buffer_create(uint8_t format, uint8_t channels, uint32_t sample_rate, 
             break;
         }
     }
-    if (buffer_id == -1) return -1;
     
-    // Allocate buffer data
+    if (buffer_id < 0) {
+        return -1;  // No free buffers
+    }
+    
+    // Allocate buffer memory
     buffers[buffer_id].data = kmalloc(size);
-    if (!buffers[buffer_id].data) return -1;
+    if (!buffers[buffer_id].data) {
+        return -1;  // Memory allocation failed
+    }
     
-    // Initialize buffer
+    // Initialize buffer properties
     buffers[buffer_id].size = size;
     buffers[buffer_id].position = 0;
     buffers[buffer_id].format = format;
     buffers[buffer_id].channels = channels;
     buffers[buffer_id].sample_rate = sample_rate;
     buffers[buffer_id].state = BUFFER_STATE_STOPPED;
+    buffers[buffer_id].callback = NULL;
     
     return buffer_id;
 }
 
 // Destroy a sound buffer
-void sound_buffer_destroy(int buffer) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return;
+void sound_buffer_destroy(uint32_t buffer) {
+    if (buffer >= MAX_SOUND_BUFFERS) return;
     if (buffers[buffer].state == BUFFER_STATE_FREE) return;
     
-    // Stop playback if needed
+    // Stop if playing
     if (buffers[buffer].state == BUFFER_STATE_PLAYING) {
         sound_stop(buffer);
     }
     
-    // Free buffer data
+    // Free buffer memory
     if (buffers[buffer].data) {
         kfree(buffers[buffer].data);
+        buffers[buffer].data = NULL;
     }
     
     // Reset buffer state
     buffers[buffer].state = BUFFER_STATE_FREE;
-    buffers[buffer].data = NULL;
     buffers[buffer].callback = NULL;
-    buffers[buffer].user_data = NULL;
 }
 
 // Write data to buffer
-int sound_buffer_write(int buffer, const void* data, uint32_t size) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return -1;
+int sound_buffer_write(uint32_t buffer, const void* data, uint32_t size, uint32_t offset) {
+    if (buffer >= MAX_SOUND_BUFFERS) return -1;
     if (buffers[buffer].state == BUFFER_STATE_FREE) return -1;
-    if (!data) return -1;
+    if (!data || !size) return -1;
     
-    // Check if size exceeds buffer size
-    if (size > buffers[buffer].size) {
-        size = buffers[buffer].size;
+    // Check if write would exceed buffer size
+    if (offset + size > buffers[buffer].size) {
+        return -1;
     }
     
-    // Copy data
-    memcpy(buffers[buffer].data, data, size);
+    // Copy data to buffer
+    memcpy((uint8_t*)buffers[buffer].data + offset, data, size);
     return size;
 }
 
 // Read data from buffer
-int sound_buffer_read(int buffer, void* data, uint32_t size) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return -1;
+int sound_buffer_read(uint32_t buffer, void* data, uint32_t size, uint32_t offset) {
+    if (buffer >= MAX_SOUND_BUFFERS) return -1;
     if (buffers[buffer].state == BUFFER_STATE_FREE) return -1;
-    if (!data) return -1;
+    if (!data || !size) return -1;
     
-    // Check if size exceeds remaining data
-    uint32_t remaining = buffers[buffer].size - buffers[buffer].position;
-    if (size > remaining) {
-        size = remaining;
+    // Check if read would exceed buffer size
+    if (offset + size > buffers[buffer].size) {
+        return -1;
     }
     
-    // Copy data
-    memcpy(data, buffers[buffer].data + buffers[buffer].position, size);
-    buffers[buffer].position += size;
-    
+    // Copy data from buffer
+    memcpy(data, (uint8_t*)buffers[buffer].data + offset, size);
     return size;
 }
 
 // Set buffer callback
-void sound_buffer_set_callback(int buffer, void (*callback)(void*), void* user_data) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return;
+void sound_buffer_set_callback(uint32_t buffer, sound_callback_t callback) {
+    if (buffer >= MAX_SOUND_BUFFERS) return;
     if (buffers[buffer].state == BUFFER_STATE_FREE) return;
     
     buffers[buffer].callback = callback;
-    buffers[buffer].user_data = user_data;
 }
 
 // Start playing a buffer
-int sound_play(int buffer) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return -1;
+int sound_play(uint32_t buffer) {
+    if (buffer >= MAX_SOUND_BUFFERS) return -1;
     if (buffers[buffer].state == BUFFER_STATE_FREE) return -1;
     
     buffers[buffer].state = BUFFER_STATE_PLAYING;
@@ -145,8 +146,8 @@ int sound_play(int buffer) {
 }
 
 // Pause buffer playback
-int sound_pause(int buffer) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return -1;
+int sound_pause(uint32_t buffer) {
+    if (buffer >= MAX_SOUND_BUFFERS) return -1;
     if (buffers[buffer].state != BUFFER_STATE_PLAYING) return -1;
     
     buffers[buffer].state = BUFFER_STATE_PAUSED;
@@ -154,8 +155,8 @@ int sound_pause(int buffer) {
 }
 
 // Stop buffer playback
-int sound_stop(int buffer) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return -1;
+int sound_stop(uint32_t buffer) {
+    if (buffer >= MAX_SOUND_BUFFERS) return -1;
     if (buffers[buffer].state == BUFFER_STATE_FREE) return -1;
     
     buffers[buffer].state = BUFFER_STATE_STOPPED;
@@ -164,8 +165,8 @@ int sound_stop(int buffer) {
 }
 
 // Set buffer volume
-int sound_set_volume(int buffer, uint8_t volume) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return -1;
+int sound_set_volume(uint32_t buffer, uint8_t volume) {
+    if (buffer >= MAX_SOUND_BUFFERS) return -1;
     if (buffers[buffer].state == BUFFER_STATE_FREE) return -1;
     
     buffer_volumes[buffer] = volume;
@@ -173,103 +174,79 @@ int sound_set_volume(int buffer, uint8_t volume) {
 }
 
 // Get buffer volume
-uint8_t sound_get_volume(int buffer) {
-    if (buffer < 0 || buffer >= MAX_SOUND_BUFFERS) return 0;
-    if (buffers[buffer].state == BUFFER_STATE_FREE) return 0;
-    
+uint8_t sound_get_volume(uint32_t buffer) {
+    if (buffer >= MAX_SOUND_BUFFERS || buffers[buffer].state == BUFFER_STATE_FREE) {
+        return 0;
+    }
     return buffer_volumes[buffer];
 }
 
 // Mix active sound buffers
-void sound_mix_buffers(int16_t* output, uint32_t frames) {
-    if (!output) return;
+void sound_mix_buffers(void* output, uint32_t frames) {
+    int16_t* out = (int16_t*)output;
+    memset(out, 0, frames * sizeof(int16_t) * 2); // Stereo output
     
-    // Clear output buffer
-    memset(output, 0, frames * sizeof(int16_t) * 2); // Stereo output
-    
-    // Mix each active buffer
     for (int i = 0; i < MAX_SOUND_BUFFERS; i++) {
         if (buffers[i].state != BUFFER_STATE_PLAYING) continue;
         
-        uint32_t remaining = buffers[i].size - buffers[i].position;
         uint32_t mix_frames = frames;
-        if (mix_frames > remaining) {
-            mix_frames = remaining;
+        uint32_t available_frames = (buffers[i].size - buffers[i].position) / 
+            sound_get_frame_size(buffers[i].format, buffers[i].channels);
+            
+        if (mix_frames > available_frames) {
+            mix_frames = available_frames;
+        }
+        
+        if (mix_frames == 0) {
+            // Buffer finished playing
+            if (buffers[i].callback) {
+                buffers[i].callback(buffers[i].data, buffers[i].size);
+            }
+            sound_stop(i);
+            continue;
         }
         
         // Mix based on format
         if (buffers[i].format == SOUND_FORMAT_PCM8) {
             uint8_t* src = (uint8_t*)buffers[i].data + buffers[i].position;
-            float volume = buffer_volumes[i] / 255.0f;
-            
             for (uint32_t j = 0; j < mix_frames; j++) {
-                int16_t sample = ((int16_t)src[j] - 128) << 8;
-                sample = (int16_t)(sample * volume);
+                int16_t sample = ((int16_t)(*src++) - 128) << 8;
+                sample = (sample * buffer_volumes[i]) >> 8;
                 
-                output[j * 2] += sample;     // Left
-                output[j * 2 + 1] += sample; // Right
+                out[j * 2] += sample;     // Left
+                out[j * 2 + 1] += sample; // Right
             }
         }
         else if (buffers[i].format == SOUND_FORMAT_PCM16) {
-            int16_t* src = (int16_t*)(buffers[i].data + buffers[i].position);
-            float volume = buffer_volumes[i] / 255.0f;
-            
+            int16_t* src = (int16_t*)((uint8_t*)buffers[i].data + buffers[i].position);
             for (uint32_t j = 0; j < mix_frames; j++) {
-                int16_t sample = (int16_t)(src[j] * volume);
+                int16_t sample = *src++;
+                sample = (sample * buffer_volumes[i]) >> 8;
                 
-                output[j * 2] += sample;     // Left
-                output[j * 2 + 1] += sample; // Right
+                out[j * 2] += sample;     // Left
+                out[j * 2 + 1] += sample; // Right
             }
         }
         
-        // Update position
+        // Update buffer position
         buffers[i].position += mix_frames * sound_get_frame_size(buffers[i].format, buffers[i].channels);
-        
-        // Check for end of buffer
-        if (buffers[i].position >= buffers[i].size) {
-            buffers[i].position = 0;
-            
-            // Call callback if set
-            if (buffers[i].callback) {
-                buffers[i].callback(buffers[i].user_data);
-            }
-        }
     }
 }
 
-// Update sound system
-void sound_update(void) {
-    // This should be called regularly to update sound playback
-    // Typically called from a timer interrupt
-    
-    // TODO: Implement actual sound output
-    // For now, we just maintain buffer states
-}
-
-// Utility functions
-uint32_t sound_bytes_to_frames(uint8_t format, uint8_t channels, uint32_t bytes) {
-    uint32_t frame_size = sound_get_frame_size(format, channels);
-    if (frame_size == 0) return 0;
-    return bytes / frame_size;
-}
-
-uint32_t sound_frames_to_bytes(uint8_t format, uint8_t channels, uint32_t frames) {
-    return frames * sound_get_frame_size(format, channels);
-}
-
+// Get frame size in bytes
 uint32_t sound_get_frame_size(uint8_t format, uint8_t channels) {
-    uint32_t sample_size;
+    uint32_t bytes_per_sample;
     
     switch (format) {
         case SOUND_FORMAT_PCM8:
-            sample_size = 1;
+            bytes_per_sample = 1;
             break;
         case SOUND_FORMAT_PCM16:
-            sample_size = 2;
+            bytes_per_sample = 2;
             break;
         default:
             return 0;
     }
     
-    return sample_size * channels;
+    return bytes_per_sample * channels;
 }

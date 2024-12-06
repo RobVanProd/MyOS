@@ -1,24 +1,20 @@
  #include <mouse.h>
 #include <io.h>
 #include <pic.h>
-#include <graphics.h>
+#include "graphics.h"
 #include <isr.h>
+#include <stddef.h>
 
-// Define mouse state structure
-typedef struct {
-    int x;
-    int y;
-    int dx;
-    int dy;
-    uint8_t buttons;
-} mouse_event_t;
+// Mouse callback type
+typedef void (*mouse_callback_t)(mouse_state_t*);
 
-static mouse_event_t mouse_state = {0, 0, 0, 0, 0};
+// Define mouse state
+static mouse_state_t mouse_state = {0, 0, 0};
 static mouse_callback_t mouse_callback = NULL;
 static uint8_t mouse_cycle = 0;
 static uint8_t mouse_byte[3];
 
-static void mouse_wait(uint8_t type) {
+void mouse_wait(uint8_t type) {
     uint32_t timeout = 100000;
     if (type == 0) {
         while (timeout--) {
@@ -33,52 +29,73 @@ static void mouse_wait(uint8_t type) {
     }
 }
 
-static void mouse_write(uint8_t data) {
+void mouse_write(uint8_t data) {
     mouse_wait(1);
     outb(0x64, 0xD4);
     mouse_wait(1);
     outb(0x60, data);
 }
 
-static uint8_t mouse_read(void) {
+uint8_t mouse_read(void) {
     mouse_wait(0);
     return inb(0x60);
 }
 
 void mouse_handle_interrupt(registers_t* regs) {
-    (void)regs;  // Unused parameter
+    (void)regs; // Unused parameter
     
-    switch (mouse_cycle) {
+    uint8_t status = inb(MOUSE_STATUS_PORT);
+    if (!(status & 0x20)) {
+        return; // No mouse data to read
+    }
+
+    uint8_t data = inb(MOUSE_DATA_PORT);
+    
+    switch(mouse_cycle) {
         case 0:
-            mouse_byte[0] = mouse_read();
-            mouse_cycle++;
+            mouse_byte[0] = data;
+            if (data & 0x08) { // Check if this is the start of a packet
+                mouse_cycle++;
+            }
             break;
         case 1:
-            mouse_byte[1] = mouse_read();
+            mouse_byte[1] = data;
             mouse_cycle++;
             break;
         case 2:
-            mouse_byte[2] = mouse_read();
+            mouse_byte[2] = data;
+            mouse_cycle = 0;
             
             // Update mouse state
-            mouse_state.dx = mouse_byte[1];
-            mouse_state.dy = -mouse_byte[2];
-            mouse_state.x += mouse_state.dx;
-            mouse_state.y += mouse_state.dy;
             mouse_state.buttons = mouse_byte[0] & 0x07;
             
-            // Clamp mouse position
+            // Handle X movement
+            int8_t x = mouse_byte[1];
+            if (mouse_byte[0] & MOUSE_X_SIGN) {
+                x |= 0xFFFFFF00;
+            }
+            mouse_state.x += x;
+            
+            // Handle Y movement
+            int8_t y = mouse_byte[2];
+            if (mouse_byte[0] & MOUSE_Y_SIGN) {
+                y |= 0xFFFFFF00;
+            }
+            mouse_state.y -= y; // Inverted Y axis
+            
+            // Clamp coordinates to screen boundaries
             if (mouse_state.x < 0) mouse_state.x = 0;
             if (mouse_state.y < 0) mouse_state.y = 0;
             if (mouse_state.x >= SCREEN_WIDTH) mouse_state.x = SCREEN_WIDTH - 1;
             if (mouse_state.y >= SCREEN_HEIGHT) mouse_state.y = SCREEN_HEIGHT - 1;
             
+            // Update cursor position
+            update_cursor(mouse_state.x, mouse_state.y);
+            
             // Call callback if registered
             if (mouse_callback) {
                 mouse_callback(&mouse_state);
             }
-            
-            mouse_cycle = 0;
             break;
     }
     
@@ -115,4 +132,12 @@ void mouse_init(void) {
 
 void mouse_set_callback(mouse_callback_t callback) {
     mouse_callback = callback;
+}
+
+void mouse_get_state(mouse_state_t* state) {
+    if (state) {
+        state->x = mouse_state.x;
+        state->y = mouse_state.y;
+        state->buttons = mouse_state.buttons;
+    }
 }

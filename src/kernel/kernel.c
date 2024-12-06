@@ -10,19 +10,33 @@
 #include "hal.h"
 #include "driver.h"
 #include "pci.h"
+#include "isr.h"
+#include "storage/ata.h"
+#include "network/rtl8139.h"
+#include "test_process.h"
+#include "sound_buffer.h"  // Add sound_buffer.h include
 
 // Function declarations
 void init_kernel(void);
 void init_drivers(void);
-void handle_sound_callback(void* user_data);
+void handle_sound_callback(void* buffer, uint32_t length, void* user_data);
+void irq12_handler(registers_t* regs);
+void test_process_management(void);  // Add test function declaration
 
 // Global variables
 static int sound_playing = 0;
 
 // Sound callback
-void handle_sound_callback(void* user_data) {
-    (void)user_data; // Suppress unused parameter warning
-    sound_playing = 0;
+void handle_sound_callback(void* buffer, uint32_t length, void* user_data) {
+    // Handle sound buffer filling here
+    (void)buffer;   // Prevent unused parameter warning
+    (void)length;   // Prevent unused parameter warning
+    (void)user_data; // Prevent unused parameter warning
+}
+
+// Mouse interrupt handler
+void irq12_handler(registers_t* regs) {
+    mouse_handle_interrupt(regs);
 }
 
 // Kernel entry point
@@ -39,14 +53,24 @@ void kernel_main(void) {
     // Initialize sound system
     sound_init();
     
+    // Initialize process management
+    process_init();
+    
+    // Run process management tests
+    terminal_writestring("\nStarting process management tests...\n");
+    test_process_management();
+    terminal_writestring("Process management tests completed.\n");
+    
     // Set up sound callback
     sound_buffer_set_callback(0, handle_sound_callback, NULL);
     
     // Initialize mouse
     mouse_init();
     
+    // Register mouse interrupt handler
+    register_interrupt_handler(44, irq12_handler); // IRQ12 is mapped to interrupt 44
+    
     // Clear terminal
-    terminal_initialize();
     terminal_writestring("Welcome to MyOS!\n");
     terminal_writestring("Initializing system...\n");
     
@@ -59,11 +83,6 @@ void kernel_main(void) {
         char c = keyboard_getchar();
         if (c) {
             terminal_putchar(c);
-        }
-        
-        // Process mouse events
-        void irq12_handler(registers_t* regs) {
-            mouse_handle_interrupt(regs);
         }
         
         // Update sound system
@@ -100,13 +119,13 @@ void init_drivers(void) {
     // Initialize PCI
     pci_init();
     
-    // Register storage drivers
+    // Initialize storage drivers
     driver_t* storage_driver = driver_find_by_type(DRIVER_TYPE_STORAGE);
     if (storage_driver) {
         driver_register(storage_driver);
     }
     
-    // Register network drivers
+    // Initialize network drivers
     driver_t* network_driver = driver_find_by_type(DRIVER_TYPE_NETWORK);
     if (network_driver) {
         driver_register(network_driver);

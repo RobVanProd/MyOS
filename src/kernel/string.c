@@ -9,6 +9,14 @@ size_t strlen(const char* str) {
     return len;
 }
 
+void* memset(void* dest, int val, size_t len) {
+    unsigned char* ptr = dest;
+    while (len-- > 0) {
+        *ptr++ = val;
+    }
+    return dest;
+}
+
 char* strcpy(char* dest, const char* src) {
     char* d = dest;
     while ((*dest++ = *src++));
@@ -47,14 +55,6 @@ int memcmp(const void* s1, const void* s2, size_t n) {
         p2++;
     }
     return 0;
-}
-
-void* memset(void* s, int c, size_t n) {
-    unsigned char* p = s;
-    while (n--) {
-        *p++ = (unsigned char)c;
-    }
-    return s;
 }
 
 void* memcpy(void* dest, const void* src, size_t n) {
@@ -102,35 +102,40 @@ static void ftoa(double num, char* str, int precision) {
 }
 
 // Simple string to float conversion
-double atof(const char* str) {
-    double result = 0;
-    double factor = 1;
-    int decimal = 0;
-    
-    // Handle negative numbers
-    if (*str == '-') {
-        factor = -1;
-        str++;
+double atof(const char* s) {
+    double result = 0.0;
+    double power = 1.0;
+    int sign = 1;
+    int i = 0;
+
+    // Skip whitespace
+    while (s[i] == ' ' || s[i] == '\t') i++;
+
+    // Handle sign
+    if (s[i] == '-') {
+        sign = -1;
+        i++;
+    } else if (s[i] == '+') {
+        i++;
     }
-    
-    // Process digits before decimal point
-    while (*str >= '0' && *str <= '9') {
-        result = result * 10 + (*str - '0');
-        str++;
+
+    // Process integer part
+    while (s[i] >= '0' && s[i] <= '9') {
+        result = result * 10.0 + (s[i] - '0');
+        i++;
     }
-    
-    // Process decimal point and following digits
-    if (*str == '.') {
-        str++;
-        double power = 0.1;
-        while (*str >= '0' && *str <= '9') {
-            result += (*str - '0') * power;
-            power *= 0.1;
-            str++;
+
+    // Process decimal part
+    if (s[i] == '.') {
+        i++;
+        while (s[i] >= '0' && s[i] <= '9') {
+            result = result * 10.0 + (s[i] - '0');
+            power *= 10.0;
+            i++;
         }
     }
-    
-    return result * factor;
+
+    return sign * result / power;
 }
 
 int strcmp(const char* s1, const char* s2) {

@@ -1,23 +1,11 @@
 #include "kheap.h"
 #include "memory.h"
-#include "paging.h"
 #include "terminal.h"
-#include <memory.h>
-#include <string.h>
 #include <stdint.h>
+#include <string.h>
 
 // Minimum block size (including header)
-#define MIN_BLOCK_SIZE 32
-
-// Block header structure
-typedef struct block_header {
-    uint32_t magic;
-    uint32_t size;
-    uint8_t is_free;
-    struct block_header* next;
-    struct block_header* prev;
-    uint32_t checksum;
-} block_header_t;
+#define MIN_BLOCK_SIZE 64
 
 // Frame allocation function
 static uint32_t find_free_frame(void) {
@@ -31,346 +19,320 @@ static uint32_t find_free_frame(void) {
 extern uint32_t end;
 uint32_t placement_address = (uint32_t)&end;
 
-// Kernel heap
+// Global kernel heap
 static heap_t* kheap = NULL;
 
+// Forward declarations
+static uint32_t calculate_checksum(header_t* header);
+static void update_checksum(header_t* header);
+static header_t* find_best_fit(heap_t* heap, uint32_t size);
+static void split_block(header_t* block, uint32_t size);
+static void coalesce_blocks(heap_t* heap);
+
 // Calculate checksum for a block header
-static uint32_t calculate_checksum(block_header_t* header) {
+static uint32_t calculate_checksum(header_t* header) {
     uint32_t sum = 0;
-    uint32_t* ptr = (uint32_t*)header;
-    for (size_t i = 0; i < (sizeof(block_header_t) - sizeof(uint32_t)) / 4; i++) {
+    uint8_t* ptr = (uint8_t*)header;
+    
+    // Skip the checksum field itself
+    for (size_t i = 0; i < offsetof(header_t, checksum); i++) {
         sum += ptr[i];
     }
+    
     return sum;
 }
 
 // Update checksum for a block header
-static void update_checksum(block_header_t* header) {
+static void update_checksum(header_t* header) {
     header->checksum = calculate_checksum(header);
 }
 
-// Validate block header
-static int validate_header(block_header_t* header) {
-    if (!header) return 0;
-    if (header->magic != HEAP_MAGIC) return 0;
-    if (calculate_checksum(header) != header->checksum) return 0;
-    return 1;
-}
-
-// Initialize kernel heap
-void init_kheap(void) {
-    // Start with a small heap (16MB)
-    uint32_t heap_start = 0xC0400000;
-    uint32_t heap_end = heap_start + 0x1000000;
-    uint32_t heap_max = heap_start + 0x10000000;
-    
-    // Map initial heap pages
-    for (uint32_t addr = heap_start; addr < heap_end; addr += PAGE_SIZE) {
-        uint32_t flags = PAGE_PRESENT | PAGE_WRITE;
-        map_page(addr, find_free_frame(), flags);
-    }
-    
-    kheap = create_heap(heap_start, heap_end, heap_max, 1, 0);
-}
-
-// Allocate memory
-void* kmalloc(uint32_t size) {
+// Initialize the kernel heap
+void kheap_init(void) {
     if (!kheap) {
-        // Early allocation before heap is initialized
-        uint32_t addr = placement_address;
-        placement_address += size;
-        return (void*)addr;
-    }
-    
-    return heap_alloc(kheap, size);
-}
-
-// Allocate aligned memory
-void* kmalloc_aligned(uint32_t size) {
-    if (!kheap) {
-        uint32_t addr = placement_address;
-        if (addr & 0xFFFFF000) {
-            addr &= 0xFFFFF000;
-            addr += 0x1000;
+        kheap = create_heap(0x100000, 0x200000, 0x1000000, 1, 0);
+        if (!kheap) {
+            terminal_writestring("Failed to create kernel heap!\n");
         }
-        placement_address = addr + size;
-        return (void*)addr;
     }
-    
-    // Round up size to page boundary
-    size = (size + 0xFFF) & 0xFFFFF000;
-    return heap_alloc(kheap, size);
 }
 
-// Allocate physical memory
-void* kmalloc_physical(uint32_t size, uint32_t* physical) {
-    void* addr = kmalloc(size);
-    if (physical) {
-        *physical = (uint32_t)addr - KERNEL_VIRTUAL_BASE;
+// Allocate memory from the kernel heap
+void* kmalloc(uint32_t size) {
+    if (kheap) {
+        return heap_alloc(kheap, size);
     }
-    return addr;
+    return NULL;
 }
 
-// Allocate aligned physical memory
-void* kmalloc_aligned_physical(uint32_t size, uint32_t* physical) {
-    void* addr = kmalloc_aligned(size);
-    if (physical) {
-        *physical = (uint32_t)addr - KERNEL_VIRTUAL_BASE;
+// Allocate aligned memory from the kernel heap
+void* kmalloc_aligned(uint32_t size) {
+    if (kheap) {
+        uint32_t aligned_size = (size + 0xFFF) & ~0xFFF;
+        return heap_alloc(kheap, aligned_size);
     }
-    return addr;
+    return NULL;
 }
 
-// Free memory
+// Free memory back to the kernel heap
 void kfree(void* ptr) {
-    if (!ptr) return;
-    heap_free(kheap, ptr);
+    if (kheap && ptr) {
+        heap_free(kheap, ptr);
+    }
 }
 
 // Create a new heap
 heap_t* create_heap(uint32_t start, uint32_t end, uint32_t max, uint8_t supervisor, uint8_t readonly) {
-    heap_t* heap = (heap_t*)kmalloc(sizeof(heap_t));
-    if (!heap) return NULL;
+    heap_t* heap = (heap_t*)start;
     
-    heap->start_address = start;
+    // Initialize heap structure
+    heap->start_address = start + sizeof(heap_t);
     heap->end_address = end;
     heap->max_address = max;
     heap->supervisor = supervisor;
     heap->readonly = readonly;
     heap->current_size = 0;
-    
+    heap->free_list = NULL;
+
+    // Create initial free block
+    header_t* initial_block = (header_t*)heap->start_address;
+    initial_block->magic = HEAP_MAGIC;
+    initial_block->size = end - heap->start_address - sizeof(header_t);
+    initial_block->is_free = 1;
+    initial_block->next = NULL;
+    initial_block->prev = NULL;
+    update_checksum(initial_block);
+
+    // Set as first free block
+    heap->free_list = initial_block;
+
     return heap;
 }
 
-// Allocate memory from heap
-void* heap_alloc(heap_t* heap, uint32_t size) {
-    if (!heap || size == 0) return NULL;
-    
-    // Round up to nearest page size
-    size = (size + 0xFFF) & 0xFFFFF000;
-    
-    uint32_t addr = heap->start_address + heap->current_size;
-    if (addr + size > heap->max_address) return NULL;
-    
-    // Map pages
-    for (uint32_t i = 0; i < size; i += 0x1000) {
-        uint32_t flags = PAGE_PRESENT | PAGE_WRITE;
-        if (!heap->supervisor) flags |= PAGE_USER;
-        map_page(addr + i, find_free_frame(), flags);
-    }
-    
-    heap->current_size += size;
-    return (void*)addr;
-}
-
-// Free memory in heap
-void heap_free(heap_t* heap, void* ptr) {
-    if (!heap || !ptr) return;
-    
-    uint32_t addr = (uint32_t)ptr;
-    if (addr < heap->start_address || addr >= heap->end_address) return;
-    
-    // Unmap pages
-    uint32_t size = 0x1000;  // Always free at least one page
-    while (addr + size <= heap->end_address) {
-        unmap_page(addr + size - 0x1000);
-        size += 0x1000;
-    }
-    
-    // Update heap size
-    if (addr + size == heap->start_address + heap->current_size) {
-        heap->current_size -= size;
-    }
-}
-
-typedef struct heap {
-    uint32_t start_address;
-    uint32_t end_address;
-    uint32_t max_address;
-    uint32_t current_size;
-    uint8_t supervisor;
-    uint8_t readonly;
-} heap_t;
-
-// Find the best fitting block for a given size
-static block_header_t *find_best_fit(heap_t *heap, uint32_t size) {
-    block_header_t *best_fit = NULL;
+// Find best fitting block for allocation
+static header_t* find_best_fit(heap_t* heap, uint32_t size) {
+    header_t* best_fit = NULL;
     uint32_t best_size = 0xFFFFFFFF;
-    
-    block_header_t *block = heap->free_list;
-    while (block) {
-        if (!validate_header(block)) {
-            terminal_writestring("Heap corruption detected!\n");
-            return NULL;
-        }
-        
+
+    for (header_t* block = heap->free_list; block != NULL; block = block->next) {
         if (block->is_free && block->size >= size) {
             if (block->size < best_size) {
                 best_size = block->size;
                 best_fit = block;
             }
         }
-        block = block->next;
     }
-    
+
     return best_fit;
 }
 
 // Split a block if it's too large
-static void split_block(block_header_t *block, uint32_t size) {
-    if (block->size >= size + sizeof(block_header_t) + MIN_BLOCK_SIZE) {
-        block_header_t *new_block = (block_header_t*)((uint32_t)block + size);
+static void split_block(header_t* block, uint32_t size) {
+    if (block->size > size + sizeof(header_t) + MIN_BLOCK_SIZE) {  
+        header_t* new_block = (header_t*)((uint32_t)block + sizeof(header_t) + size);
         new_block->magic = HEAP_MAGIC;
-        new_block->size = block->size - size;
+        new_block->size = block->size - size - sizeof(header_t);
         new_block->is_free = 1;
         new_block->next = block->next;
         new_block->prev = block;
         update_checksum(new_block);
-        
+
         if (block->next) {
             block->next->prev = new_block;
-            update_checksum(block->next);
         }
-        
-        block->size = size;
+
         block->next = new_block;
+        block->size = size;
         update_checksum(block);
     }
 }
 
-// Merge adjacent free blocks
-static void coalesce_blocks(heap_t *heap) {
-    block_header_t *block = heap->free_list;
-    while (block && block->next) {
-        if (!validate_header(block) || !validate_header(block->next)) {
-            terminal_writestring("Heap corruption detected during coalescing!\n");
-            return;
-        }
-        
-        if (block->is_free && block->next->is_free) {
-            block->size += block->next->size;
+// Coalesce adjacent free blocks
+static void coalesce_blocks(heap_t* heap) {
+    for (header_t* block = heap->free_list; block != NULL; block = block->next) {
+        if (block->is_free && block->next != NULL && block->next->is_free) {
+            // Merge with next block
+            block->size += sizeof(header_t) + block->next->size;
             block->next = block->next->next;
-            if (block->next) {
+            if (block->next != NULL) {
                 block->next->prev = block;
                 update_checksum(block->next);
             }
             update_checksum(block);
-        } else {
-            block = block->next;
         }
     }
 }
 
+// Allocate memory from heap
+void* heap_alloc(heap_t* heap, uint32_t size) {
+    if (!heap || size == 0) {
+        return NULL;
+    }
+
+    // Find a suitable block
+    header_t* block = find_best_fit(heap, size);
+    
+    // If no suitable block found, try to expand heap
+    if (!block) {
+        if (!expand_heap(heap, size)) {
+            return NULL;
+        }
+        block = find_best_fit(heap, size);
+        if (!block) {
+            return NULL;
+        }
+    }
+
+    // Split block if necessary
+    split_block(block, size);
+    
+    // Mark block as used
+    block->is_free = 0;
+    update_checksum(block);
+
+    return (void*)((uint32_t)block + sizeof(header_t));
+}
+
+// Free memory back to heap
+void heap_free(heap_t* heap, void* ptr) {
+    if (!heap || !ptr) {
+        return;
+    }
+
+    // Get block header
+    header_t* block = (header_t*)((uint32_t)ptr - sizeof(header_t));
+
+    // Validate block
+    if (block->magic != HEAP_MAGIC || block->checksum != calculate_checksum(block)) {
+        terminal_writestring("Invalid block header in heap_free!\n");
+        return;
+    }
+
+    // Mark block as free
+    block->is_free = 1;
+    update_checksum(block);
+
+    // Try to coalesce blocks
+    coalesce_blocks(heap);
+}
+
 // Expand the heap
-uint32_t expand_heap(heap_t *heap, uint32_t size) {
-    if (heap->end_address + size > heap->max_address) {
+uint32_t expand_heap(heap_t* heap, uint32_t size) {
+    if (!heap) {
         return 0;
     }
-    
-    uint32_t old_end = heap->end_address;
-    heap->end_address += size;
-    
-    // Map new pages
-    for (uint32_t addr = old_end; addr < heap->end_address; addr += PAGE_SIZE) {
-        uint32_t flags = PAGE_PRESENT | PAGE_WRITE;
-        map_page(addr, find_free_frame(), flags);
+
+    // Check if we can expand
+    uint32_t new_size = heap->current_size + size + sizeof(header_t);
+    if (heap->end_address + new_size > heap->max_address) {
+        return 0;
     }
-    
-    // Create new free block
-    block_header_t *new_block = (block_header_t*)old_end;
+
+    // Create new block at the end
+    header_t* new_block = (header_t*)heap->end_address;
     new_block->magic = HEAP_MAGIC;
-    new_block->size = size;
+    new_block->size = size - sizeof(header_t);
     new_block->is_free = 1;
     new_block->next = NULL;
     new_block->prev = NULL;
     update_checksum(new_block);
-    
+
     // Add to free list
-    block_header_t *last_block = heap->free_list;
-    while (last_block->next) {
-        last_block = last_block->next;
+    if (heap->free_list == NULL) {
+        heap->free_list = new_block;
+    } else {
+        header_t* last = heap->free_list;
+        while (last->next) {
+            last = last->next;
+        }
+        last->next = new_block;
+        new_block->prev = last;
+        update_checksum(new_block);
+        update_checksum(last);
     }
-    last_block->next = new_block;
-    new_block->prev = last_block;
-    update_checksum(last_block);
-    
-    coalesce_blocks(heap);
+
+    // Update heap size and end address
+    heap->current_size += size;
+    heap->end_address += size;
+
     return 1;
 }
 
-void get_heap_stats(uint32_t *total_blocks, uint32_t *free_blocks, uint32_t *largest_free) {
-    *total_blocks = 0;
-    *free_blocks = 0;
+// Get heap statistics
+void get_heap_stats(uint32_t* total, uint32_t* used, uint32_t* largest_free) {
+    if (!kheap) {
+        *total = 0;
+        *used = 0;
+        *largest_free = 0;
+        return;
+    }
+
+    *total = kheap->current_size;
+    *used = 0;
     *largest_free = 0;
-    
-    block_header_t *block = kheap->free_list;
-    while (block) {
-        if (!validate_header(block)) {
-            terminal_writestring("Heap corruption detected during stats collection!\n");
-            return;
+    uint32_t largest = 0;
+
+    for (header_t* block = kheap->free_list; block != NULL; block = block->next) {
+        // Count used space
+        if (!block->is_free) {
+            *used += block->size + sizeof(header_t);
+        } else if (block->size > largest) {
+            largest = block->size;
         }
-        
-        (*total_blocks)++;
-        if (block->is_free) {
-            (*free_blocks)++;
-            if (block->size > *largest_free) {
-                *largest_free = block->size;
-            }
-        }
-        block = block->next;
     }
+
+    *largest_free = largest;
 }
 
+// Dump heap information for debugging
 void heap_dump(void) {
-    terminal_writestring("\nHeap Dump:\n");
-    terminal_writestring("----------\n");
-    
-    block_header_t *block = kheap->free_list;
-    while (block) {
-        if (!validate_header(block)) {
-            terminal_writestring("Heap corruption detected during dump!\n");
-            return;
-        }
-        
-        // Convert address to hex string
-        char addr[17];
-        uint32_t temp = (uint32_t)block;
-        for (int i = 0; i < 8; i++) {
-            int digit = (temp >> ((7-i) * 4)) & 0xF;
-            addr[i] = digit < 10 ? '0' + digit : 'A' + (digit - 10);
-        }
-        addr[8] = '\0';
-        
-        terminal_writestring("Block at 0x");
-        terminal_writestring(addr);
-        terminal_writestring(": size=");
-        
-        // Convert size to decimal string
-        char size[11];
-        temp = block->size;
-        int idx = 0;
-        do {
-            size[idx++] = '0' + (temp % 10);
-            temp /= 10;
-        } while (temp > 0);
-        size[idx] = '\0';
-        
-        // Print in reverse
-        while (--idx >= 0) {
-            terminal_putchar(size[idx]);
-        }
-        
-        terminal_writestring(block->is_free ? " (free)\n" : " (used)\n");
-        block = block->next;
+    if (!kheap) {
+        terminal_writestring("Heap not initialized!\n");
+        return;
+    }
+
+    terminal_writestring("Heap Information:\n");
+    terminal_writestring("Start: "); terminal_writehex(kheap->start_address); terminal_writestring("\n");
+    terminal_writestring("End: "); terminal_writehex(kheap->end_address); terminal_writestring("\n");
+    terminal_writestring("Max: "); terminal_writehex(kheap->max_address); terminal_writestring("\n");
+    terminal_writestring("Size: "); terminal_writehex(kheap->current_size); terminal_writestring("\n");
+
+    terminal_writestring("\nBlocks:\n");
+    for (header_t* block = kheap->free_list; block != NULL; block = block->next) {
+        terminal_writestring("Block at "); terminal_writehex((uint32_t)block); terminal_writestring(":\n");
+        terminal_writestring("  Size: "); terminal_writehex(block->size); terminal_writestring("\n");
+        terminal_writestring("  Free: "); terminal_writehex(block->is_free); terminal_writestring("\n");
+        terminal_writestring("  Magic: "); terminal_writehex(block->magic); terminal_writestring("\n");
+        terminal_writestring("  Checksum: "); terminal_writehex(block->checksum); terminal_writestring("\n");
     }
 }
 
-int heap_check(void) {
-    block_header_t *block = kheap->free_list;
-    while (block) {
-        if (!validate_header(block)) {
-            return 0;
-        }
-        block = block->next;
+// Check heap integrity
+bool heap_check(void) {
+    if (!kheap) {
+        return false;
     }
-    return 1;
+
+    // Check all blocks
+    for (header_t* block = kheap->free_list; block != NULL; block = block->next) {
+        // Check magic number
+        if (block->magic != HEAP_MAGIC) {
+            terminal_writestring("Invalid magic number in block!\n");
+            return false;
+        }
+
+        // Check checksum
+        if (block->checksum != calculate_checksum(block)) {
+            terminal_writestring("Invalid checksum in block!\n");
+            return false;
+        }
+
+        // Check block links
+        if (block->next != NULL && block->next->prev != block) {
+            terminal_writestring("Invalid block links!\n");
+            return false;
+        }
+    }
+
+    return true;
 }
